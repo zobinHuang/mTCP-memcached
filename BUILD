@@ -1,5 +1,11 @@
 See below if building the proxy
 
+Firtsly we need to compile mTCP
+
+cd memcached/third_party/mTCP
+./configure --with-dpdk-lib=$RTE_SDK/$RTE_TARGET
+make
+
 To build memcached in your machine from local repo you will have to install
 autotools, automake and libevent. In a debian based system that will look
 like this
