@@ -530,6 +530,9 @@ if test "x$enable_tls" = "xyes"; then
   ])
 fi
 
+# add mtcp library
+LDFLAGS="-Lthird_party/mtcp/mtcp/lib $LDFLAGS"
+
 if test "x$enable_static" = "xyes"; then
   LIBS="$LIBS -ldl"
   LDFLAGS="-static $LDFLAGS"
@@ -841,7 +844,8 @@ then
 elif test "$GCC" = "yes"
 then
   GCC_VERSION=`$CC -dumpversion`
-  CFLAGS="$CFLAGS -Wall -Werror -pedantic -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls"
+  # CFLAGS="$CFLAGS -Wall -Werror -pedantic -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls"
+  CFLAGS="$CFLAGS -Wall -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls"
   if test "x$enable_asan" = "xyes"; then
     CFLAGS="$CFLAGS -fsanitize=address"
   fi

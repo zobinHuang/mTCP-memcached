@@ -27,6 +27,8 @@
 #include <ctype.h>
 #include <stdarg.h>
 
+#include <third_party/mtcp/mtcp/include/mtcp_epoll.h>
+
 /* some POSIX systems need the following definition
  * to get mlockall flags out of sys/mman.h.  */
 #ifndef _P1003_1B_VISIBLE

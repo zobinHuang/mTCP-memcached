@@ -76,6 +76,10 @@ if ENABLE_TLS
 memcached_SOURCES += tls.c tls.h
 endif
 
+# add mtcp
+memcached_SOURCES += third_party/mtcp/mtcp/include/mtcp_api.h \
+					 third_party/mtcp/mtcp/include/mtcp_epoll.h	
+
 memcached_debug_SOURCES = $(memcached_SOURCES)
 memcached_CPPFLAGS = -DNDEBUG
 memcached_debug_LDADD = @PROFILER_LDFLAGS@
