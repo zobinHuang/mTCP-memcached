@@ -795,6 +795,13 @@ void event_enable_debug_logging(ev_uint32_t which);
 EVENT2_EXPORT_SYMBOL
 int event_base_set(struct event_base *, struct event *);
 
+
+/**
+   Obtain mctx from given event base  
+ */
+EVENT2_EXPORT_SYMBOL
+mctx_t get_mctx_from_event_base(struct event_base *base);
+
 /** @name Loop flags
 
     These flags control the behavior of event_base_loop().

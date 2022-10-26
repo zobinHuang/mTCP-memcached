@@ -217,7 +217,7 @@ mtcp_epoll_apply_one_change(struct event_base *base,
 	epev.data.sockid = ch->fd;
 	epev.events = events;
 	if (mtcp_epoll_ctl(base->mctx, mtcp_epollop->mtcp_epfd, op, ch->fd, &epev) == 0) {
-		fprintf(stdout, "apply change to mtcp epoll: op - %d, events - %d, epoll id - %d, fd - %d", 
+		fprintf(stdout, "apply change to mtcp epoll: op - %d, events - %d, epoll id - %d, fd - %d\n", 
 			op, events, mtcp_epollop->mtcp_epfd, ch->fd);
 		event_debug((MTCP_PRINT_CHANGES(op, epev.events, ch, "okay")));
 		return 0;

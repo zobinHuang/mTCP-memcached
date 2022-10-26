@@ -2202,6 +2202,10 @@ event_base_set(struct event_base *base, struct event *ev)
 	return (0);
 }
 
+mctx_t get_mctx_from_event_base(struct event_base *base){
+	return base->mctx;
+}
+
 void
 event_set(struct event *ev, evutil_socket_t fd, short events,
 	  void (*callback)(evutil_socket_t, short, void *), void *arg)

@@ -3,6 +3,14 @@
         "mtcp_epoll.h": "c",
         "mtcp_api.h": "c",
         "event.h": "c",
-        "event-config.h": "c"
+        "event-config.h": "c",
+        "thread-shared-types.h": "c",
+        "*.tcc": "c",
+        "fstream": "c",
+        "iosfwd": "c",
+        "istream": "c",
+        "limits": "c",
+        "sstream": "c",
+        "streambuf": "c"
     }
 }

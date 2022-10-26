@@ -112,6 +112,9 @@ struct settings settings;
 time_t process_started;     /* when the process was started */
 conn **conns;
 
+/* MTCP Context */
+mctx_t mctx;
+
 struct slab_rebalance slab_rebal;
 volatile int slab_rebalance_signal;
 #ifdef EXTSTORE
@@ -146,6 +149,11 @@ ssize_t tcp_sendmsg(conn *c, struct msghdr *msg, int flags) {
 ssize_t tcp_write(conn *c, void *buf, size_t count) {
     assert (c != NULL);
     return write(c->sfd, buf, count);
+}
+
+ssize_t f_mtcp_read(conn *c, void *buf, size_t count) {
+    assert (c != NULL);
+    return 0;
 }
 
 static enum transmit_result transmit(conn *c);
@@ -950,7 +958,7 @@ static void conn_close(conn *c) {
         SSL_free(c->ssl);
     }
 #endif
-    close(c->sfd);
+    mtcp_close(mctx, c->sfd);
     c->close_reason = 0;
     pthread_mutex_lock(&conn_lock);
     allow_new_conns = true;
@@ -2983,6 +2991,406 @@ static void drive_machine(conn *c) {
 
         switch(c->state) {
         case conn_listening:
+            fprintf(stdout, "listening port recv connect request!\n");
+            
+            // only the main thread could accept, so we directly use global mctx here
+            int sfd = mtcp_accept(mctx, c->sfd, NULL, NULL);
+            if( sfd < 0 ){
+                fprintf(stderr, "Failed to mtcp_accept connection: %s\n", strerror(errno));
+            }
+
+            bool reject;
+            if (settings.maxconns_fast) {
+                reject = sfd >= settings.maxconns - 1;
+                if (reject) {
+                    STATS_LOCK();
+                    stats.rejected_conns++;
+                    STATS_UNLOCK();
+                }
+            } else {
+                reject = false;
+            }
+
+            if (reject) {
+                fprintf(stderr, "ERROR Too many open connections\r\n");
+                mtcp_close(mctx, sfd);
+            } else {
+                void *ssl_v = NULL;
+#ifdef TLS
+                SSL *ssl = NULL;
+                if (c->ssl_enabled) {
+                    assert(IS_TCP(c->transport) && settings.ssl_enabled);
+
+                    if (settings.ssl_ctx == NULL) {
+                        if (settings.verbose) {
+                            fprintf(stderr, "SSL context is not initialized\n");
+                        }
+                        close(sfd);
+                        break;
+                    }
+                    SSL_LOCK();
+                    ssl = SSL_new(settings.ssl_ctx);
+                    SSL_UNLOCK();
+                    if (ssl == NULL) {
+                        if (settings.verbose) {
+                            fprintf(stderr, "Failed to created the SSL object\n");
+                        }
+                        close(sfd);
+                        break;
+                    }
+                    SSL_set_fd(ssl, sfd);
+                    int ret = SSL_accept(ssl);
+                    if (ret <= 0) {
+                        int err = SSL_get_error(ssl, ret);
+                        if (err == SSL_ERROR_SYSCALL || err == SSL_ERROR_SSL) {
+                            if (settings.verbose) {
+                                fprintf(stderr, "SSL connection failed with error code : %d : %s\n", err, strerror(errno));
+                            }
+                            SSL_free(ssl);
+                            close(sfd);
+                            STATS_LOCK();
+                            stats.ssl_handshake_errors++;
+                            STATS_UNLOCK();
+                            break;
+                        }
+                    }
+                }
+                ssl_v = (void*) ssl;
+#endif
+
+                dispatch_conn_new(sfd, conn_new_cmd, EV_READ | EV_PERSIST,
+                                     READ_BUFFER_CACHED, c->transport, ssl_v, c->tag, c->protocol);
+            }
+
+            fprintf(stdout, "accept connection!\n");
+            stop = true;
+            break;
+
+        case conn_waiting:
+            rbuf_release(c);
+            if (!update_event(c, EV_READ | EV_PERSIST)) {
+                if (settings.verbose > 0)
+                    fprintf(stderr, "Couldn't update event\n");
+                conn_set_state(c, conn_closing);
+                break;
+            }
+
+            conn_set_state(c, conn_read);
+            stop = true;
+            break;
+
+        case conn_read:
+            if (!IS_UDP(c->transport)) {
+                // Assign a read buffer if necessary.
+                if (!rbuf_alloc(c)) {
+                    // TODO: Some way to allow for temporary failures.
+                    conn_set_state(c, conn_closing);
+                    break;
+                }
+                res = try_read_network(c);
+            } else {
+                // UDP connections always have a static buffer.
+                res = try_read_udp(c);
+            }
+
+            switch (res) {
+            case READ_NO_DATA_RECEIVED:
+                conn_set_state(c, conn_waiting);
+                break;
+            case READ_DATA_RECEIVED:
+                conn_set_state(c, conn_parse_cmd);
+                break;
+            case READ_ERROR:
+                conn_set_state(c, conn_closing);
+                break;
+            case READ_MEMORY_ERROR: /* Failed to allocate more memory */
+                /* State already set by try_read_network */
+                break;
+            }
+            break;
+
+        case conn_parse_cmd:
+            c->noreply = false;
+            if (c->try_read_command(c) == 0) {
+                /* we need more data! */
+                if (c->resp_head) {
+                    // Buffered responses waiting, flush in the meantime.
+                    conn_set_state(c, conn_mwrite);
+                } else {
+                    conn_set_state(c, conn_waiting);
+                }
+            }
+
+            break;
+
+        case conn_new_cmd:
+            /* Only process nreqs at a time to avoid starving other
+               connections */
+
+            --nreqs;
+            if (nreqs >= 0) {
+                reset_cmd_handler(c);
+            } else if (c->resp_head) {
+                // flush response pipe on yield.
+                conn_set_state(c, conn_mwrite);
+            } else {
+                pthread_mutex_lock(&c->thread->stats.mutex);
+                c->thread->stats.conn_yields++;
+                pthread_mutex_unlock(&c->thread->stats.mutex);
+                if (c->rbytes > 0) {
+                    /* We have already read in data into the input buffer,
+                       so libevent will most likely not signal read events
+                       on the socket (unless more data is available. As a
+                       hack we should just put in a request to write data,
+                       because that should be possible ;-)
+                    */
+                    if (!update_event(c, EV_WRITE | EV_PERSIST)) {
+                        if (settings.verbose > 0)
+                            fprintf(stderr, "Couldn't update event\n");
+                        conn_set_state(c, conn_closing);
+                        break;
+                    }
+                }
+                stop = true;
+            }
+            break;
+
+        case conn_nread:
+            if (c->rlbytes == 0) {
+                complete_nread(c);
+                break;
+            }
+
+            /* Check if rbytes < 0, to prevent crash */
+            if (c->rlbytes < 0) {
+                if (settings.verbose) {
+                    fprintf(stderr, "Invalid rlbytes to read: len %d\n", c->rlbytes);
+                }
+                conn_set_state(c, conn_closing);
+                break;
+            }
+
+            if (c->item_malloced || ((((item *)c->item)->it_flags & ITEM_CHUNKED) == 0) ) {
+                /* first check if we have leftovers in the conn_read buffer */
+                if (c->rbytes > 0) {
+                    int tocopy = c->rbytes > c->rlbytes ? c->rlbytes : c->rbytes;
+                    memmove(c->ritem, c->rcurr, tocopy);
+                    c->ritem += tocopy;
+                    c->rlbytes -= tocopy;
+                    c->rcurr += tocopy;
+                    c->rbytes -= tocopy;
+                    if (c->rlbytes == 0) {
+                        break;
+                    }
+                }
+
+                /*  now try reading from the socket */
+                res = c->read(c, c->ritem, c->rlbytes);
+                if (res > 0) {
+                    pthread_mutex_lock(&c->thread->stats.mutex);
+                    c->thread->stats.bytes_read += res;
+                    pthread_mutex_unlock(&c->thread->stats.mutex);
+                    if (c->rcurr == c->ritem) {
+                        c->rcurr += res;
+                    }
+                    c->ritem += res;
+                    c->rlbytes -= res;
+                    break;
+                }
+            } else {
+                res = read_into_chunked_item(c);
+                if (res > 0)
+                    break;
+            }
+
+            if (res == 0) { /* end of stream */
+                c->close_reason = NORMAL_CLOSE;
+                conn_set_state(c, conn_closing);
+                break;
+            }
+
+            if (res == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                if (!update_event(c, EV_READ | EV_PERSIST)) {
+                    if (settings.verbose > 0)
+                        fprintf(stderr, "Couldn't update event\n");
+                    conn_set_state(c, conn_closing);
+                    break;
+                }
+                stop = true;
+                break;
+            }
+
+            /* Memory allocation failure */
+            if (res == -2) {
+                out_of_memory(c, "SERVER_ERROR Out of memory during read");
+                c->sbytes = c->rlbytes;
+                conn_set_state(c, conn_swallow);
+                // Ensure this flag gets cleared. It gets killed on conn_new()
+                // so any conn_closing is fine, calling complete_nread is
+                // fine. This swallow semms to be the only other case.
+                c->set_stale = false;
+                c->mset_res = false;
+                break;
+            }
+            /* otherwise we have a real error, on which we close the connection */
+            if (settings.verbose > 0) {
+                fprintf(stderr, "Failed to read, and not due to blocking:\n"
+                        "errno: %d %s \n"
+                        "rcurr=%p ritem=%p rbuf=%p rlbytes=%d rsize=%d\n",
+                        errno, strerror(errno),
+                        (void *)c->rcurr, (void *)c->ritem, (void *)c->rbuf,
+                        (int)c->rlbytes, (int)c->rsize);
+            }
+            conn_set_state(c, conn_closing);
+            break;
+
+        case conn_swallow:
+            /* we are reading sbytes and throwing them away */
+            if (c->sbytes <= 0) {
+                conn_set_state(c, conn_new_cmd);
+                break;
+            }
+
+            /* first check if we have leftovers in the conn_read buffer */
+            if (c->rbytes > 0) {
+                int tocopy = c->rbytes > c->sbytes ? c->sbytes : c->rbytes;
+                c->sbytes -= tocopy;
+                c->rcurr += tocopy;
+                c->rbytes -= tocopy;
+                break;
+            }
+
+            /*  now try reading from the socket */
+            res = c->read(c, c->rbuf, c->rsize > c->sbytes ? c->sbytes : c->rsize);
+            if (res > 0) {
+                pthread_mutex_lock(&c->thread->stats.mutex);
+                c->thread->stats.bytes_read += res;
+                pthread_mutex_unlock(&c->thread->stats.mutex);
+                c->sbytes -= res;
+                break;
+            }
+            if (res == 0) { /* end of stream */
+                c->close_reason = NORMAL_CLOSE;
+                conn_set_state(c, conn_closing);
+                break;
+            }
+            if (res == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                if (!update_event(c, EV_READ | EV_PERSIST)) {
+                    if (settings.verbose > 0)
+                        fprintf(stderr, "Couldn't update event\n");
+                    conn_set_state(c, conn_closing);
+                    break;
+                }
+                stop = true;
+                break;
+            }
+            /* otherwise we have a real error, on which we close the connection */
+            if (settings.verbose > 0)
+                fprintf(stderr, "Failed to read, and not due to blocking\n");
+            conn_set_state(c, conn_closing);
+            break;
+
+        case conn_write:
+        case conn_mwrite:
+            /* have side IO's that must process before transmit() can run.
+             * remove the connection from the worker thread and dispatch the
+             * IO queue
+             */
+            assert(c->io_queues_submitted == 0);
+
+            for (io_queue_t *q = c->io_queues; q->type != IO_QUEUE_NONE; q++) {
+                if (q->stack_ctx != NULL) {
+                    io_queue_cb_t *qcb = thread_io_queue_get(c->thread, q->type);
+                    qcb->submit_cb(q);
+                    c->io_queues_submitted++;
+                }
+            }
+            if (c->io_queues_submitted != 0) {
+                conn_set_state(c, conn_io_queue);
+                event_del(&c->event);
+
+                stop = true;
+                break;
+            }
+
+            switch (!IS_UDP(c->transport) ? transmit(c) : transmit_udp(c)) {
+            case TRANSMIT_COMPLETE:
+                if (c->state == conn_mwrite) {
+                    // Free up IO wraps and any half-uploaded items.
+                    conn_release_items(c);
+                    conn_set_state(c, conn_new_cmd);
+                    if (c->close_after_write) {
+                        conn_set_state(c, conn_closing);
+                    }
+                } else {
+                    if (settings.verbose > 0)
+                        fprintf(stderr, "Unexpected state %d\n", c->state);
+                    conn_set_state(c, conn_closing);
+                }
+                break;
+
+            case TRANSMIT_INCOMPLETE:
+            case TRANSMIT_HARD_ERROR:
+                break;                   /* Continue in state machine. */
+
+            case TRANSMIT_SOFT_ERROR:
+                stop = true;
+                break;
+            }
+            break;
+
+        case conn_closing:
+            if (IS_UDP(c->transport))
+                conn_cleanup(c);
+            else
+                conn_close(c);
+            stop = true;
+            break;
+
+        case conn_closed:
+            /* This only happens if dormando is an idiot. */
+            abort();
+            break;
+
+        case conn_watch:
+            /* We handed off our connection to the logger thread. */
+            stop = true;
+            break;
+        case conn_io_queue:
+            /* Complete our queued IO's from within the worker thread. */
+            conn_io_queue_complete(c);
+            conn_set_state(c, conn_mwrite);
+            break;
+        case conn_max_state:
+            assert(false);
+            break;
+        }
+    }
+
+    return;
+}
+
+static void old_drive_machine(conn *c) {
+    bool stop = false;
+    int sfd;
+    socklen_t addrlen;
+    struct sockaddr_storage addr;
+    int nreqs = settings.reqs_per_event;
+    int res;
+    const char *str;
+#ifdef HAVE_ACCEPT4
+    static int  use_accept4 = 1;
+#else
+    static int  use_accept4 = 0;
+#endif
+
+    assert(c != NULL);
+
+    while (!stop) {
+
+        switch(c->state) {
+        case conn_listening:
+            fprintf(stdout, "listening port recv connect request!\n");
             addrlen = sizeof(addr);
 #ifdef HAVE_ACCEPT4
             if (use_accept4) {
@@ -3480,6 +3888,66 @@ static void maximize_sndbuf(const int sfd) {
  *        listen on.
  */
 static int server_socket(const char *interface,
+                         int port,
+                         enum network_transport transport,
+                         FILE *portnumber_file, bool ssl_enabled,
+                         uint64_t conntag,
+                         enum protocol bproto) {
+    int ret;
+    conn *listen_conn_add;
+
+    // create listen port
+    int listen_sock = mtcp_socket(mctx, AF_INET, SOCK_STREAM, 0);
+    if(listen_sock < 0){
+        fprintf(stderr, "failed to create mtcp socket for listening, exits\n");
+        goto create_exit;
+    }
+    ret = mtcp_setsock_nonblock(mctx, listen_sock);
+    if(ret < 0){
+        fprintf(stderr, "failed to set listen socket as non-blocking mode, exits\n");
+        goto close_mtcp_socket;
+    }
+
+    // bind socket to port
+    struct sockaddr_in saddr;
+    saddr.sin_family = AF_INET;
+	saddr.sin_addr.s_addr = INADDR_ANY;
+    saddr.sin_port = htons(11103);
+	// saddr.sin_port = htons(SOCKET_SERVER_PORT);
+	ret = mtcp_bind(mctx, listen_sock, 
+			(struct sockaddr *)&saddr, sizeof(struct sockaddr_in));
+	if (ret < 0) {
+		fprintf(stderr, "failed to bind to the listening socket, exits\n");
+		goto close_mtcp_socket;
+	}
+
+    // set as listen mode
+    ret = mtcp_listen(mctx, listen_sock, 4096);
+    if (ret < 0) {
+		fprintf(stderr, "failed to set mtcp socket as listen mode\n");
+		goto close_mtcp_socket;
+	}
+
+    // create new connection
+    if (!(listen_conn_add = conn_new(listen_sock, conn_listening,
+                                     EV_READ | EV_PERSIST, 1,
+                                     transport, main_base, NULL, conntag, bproto))) {
+        fprintf(stderr, "failed to create listening connection\n");
+        goto close_mtcp_socket;
+    }
+
+    listen_conn = listen_conn_add;
+
+    return 0;
+
+close_mtcp_socket:
+    mtcp_close(mctx, listen_sock);
+
+create_exit:
+    exit(1);
+}
+
+static int server_socket_old(const char *interface,
                          int port,
                          enum network_transport transport,
                          FILE *portnumber_file, bool ssl_enabled,
@@ -5977,8 +6445,8 @@ int main (int argc, char **argv) {
 
     /* Create MTCP Context */
     // config number of core to run mtcp
-    static int core_limit = 1;
-    static char* conf_file = "../mtcp_conf/server.conf";
+    static int core_limit = 8;
+    static char* conf_file = "./mtcp_conf/server.conf";
 
     struct mtcp_conf mcfg;
     mtcp_getconf(&mcfg);
@@ -5991,7 +6459,7 @@ int main (int argc, char **argv) {
         exit(1);
     }
 
-    mctx_t mctx = mtcp_create_context(0);
+    mctx = mtcp_create_context(0);
     if(!mctx){
         fprintf(stderr, "failed to create mtcp context, exits\n");
         exit(1);
@@ -6242,15 +6710,21 @@ int main (int argc, char **argv) {
 
         /* create the UDP listening socket and bind it */
         errno = 0;
-        if (settings.udpport && server_sockets(settings.udpport, udp_transport,
-                                              portnumber_file)) {
-            if (settings.inter == NULL) {
-                vperror("failed to listen on UDP port %d", settings.udpport);
-            } else {
-                vperror("failed to listen on one of interface(s) %s", settings.inter);
-            }
+
+        if (settings.udpport){
+            fprintf(stderr, "UDP is not allowed\n");
             exit(EX_OSERR);
         }
+
+        // if (settings.udpport && server_sockets(settings.udpport, udp_transport,
+        //                                       portnumber_file)) {
+        //     if (settings.inter == NULL) {
+        //         vperror("failed to listen on UDP port %d", settings.udpport);
+        //     } else {
+        //         vperror("failed to listen on one of interface(s) %s", settings.inter);
+        //     }
+        //     exit(EX_OSERR);
+        // }
 
         if (portnumber_file) {
             fclose(portnumber_file);

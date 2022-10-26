@@ -21,6 +21,9 @@
 
 #include "queue.h"
 
+#include <mtcp_api.h>
+#include <mtcp_epoll.h>
+
 #ifdef __sun
 #include <atomic.h>
 #endif
@@ -402,10 +405,12 @@ void accept_new_conns(const bool do_accept) {
 /*
  * Set up a thread's information.
  */
-static void setup_thread(LIBEVENT_THREAD *me) {
+static void setup_thread(LIBEVENT_THREAD *me, int cpu_id) {
 #if defined(LIBEVENT_VERSION_NUMBER) && LIBEVENT_VERSION_NUMBER >= 0x02000101
     struct event_config *ev_config;
+    mctx_t mctx = mtcp_create_context(cpu_id);
     ev_config = event_config_new();
+    event_config_set_mctp(ev_config, mctx);
     event_config_set_flag(ev_config, EVENT_BASE_FLAG_NOLOCK);
     me->base = event_base_new_with_config(ev_config);
     event_config_free(ev_config);
@@ -1079,7 +1084,7 @@ void memcached_thread_init(int nthreads, void *arg) {
 #ifdef EXTSTORE
         threads[i].storage = arg;
 #endif
-        setup_thread(&threads[i]);
+        setup_thread(&threads[i], i+1);
         /* Reserve three fds for the libevent base, and two for the pipe */
         stats_state.reserved_fds += 5;
     }
