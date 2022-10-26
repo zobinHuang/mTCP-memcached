@@ -27,7 +27,8 @@
 #include <ctype.h>
 #include <stdarg.h>
 
-#include <third_party/mtcp/mtcp/include/mtcp_epoll.h>
+#include <mtcp_api.h>
+#include <mtcp_epoll.h>
 
 /* some POSIX systems need the following definition
  * to get mlockall flags out of sys/mman.h.  */
@@ -3808,6 +3809,7 @@ static int server_sockets(int port, enum network_transport transport,
             if (strcmp(p, "*") == 0) {
                 p = NULL;
             }
+            fprintf("mmc: use interface %s\n", p);
             ret |= server_socket(p, the_port, transport, portnumber_file, ssl_enabled, conntag, bproto);
             if (ret != 0 && errno_save == 0) errno_save = errno;
         }
@@ -5973,11 +5975,34 @@ int main (int argc, char **argv) {
 #endif
     }
 
+    /* Create MTCP Context */
+    // config number of core to run mtcp
+    static int core_limit = 1;
+    static char* conf_file = "../mtcp_conf/server.conf";
+
+    struct mtcp_conf mcfg;
+    mtcp_getconf(&mcfg);
+    mcfg.num_cores = core_limit;
+    mtcp_setconf(&mcfg);
+
+    int res = mtcp_init(conf_file);
+    if (res) {
+        fprintf(stderr, "failed to init mtcp");
+        exit(1);
+    }
+
+    mctx_t mctx = mtcp_create_context(0);
+    if(!mctx){
+        fprintf(stderr, "failed to create mtcp context, exits\n");
+        exit(1);
+    }
+
     /* initialize main thread libevent instance */
 #if defined(LIBEVENT_VERSION_NUMBER) && LIBEVENT_VERSION_NUMBER >= 0x02000101
     /* If libevent version is larger/equal to 2.0.2-alpha, use newer version */
     struct event_config *ev_config;
     ev_config = event_config_new();
+    event_config_set_mctp(ev_config, mctx);
     event_config_set_flag(ev_config, EVENT_BASE_FLAG_NOLOCK);
     main_base = event_base_new_with_config(ev_config);
     event_config_free(ev_config);
@@ -6290,6 +6315,9 @@ int main (int argc, char **argv) {
 
     /* cleanup base */
     event_base_free(main_base);
+
+    /* clean mtcp environment */
+    mtcp_destroy();
 
     free(meta);
 

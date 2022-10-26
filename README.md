@@ -1,53 +1,77 @@
-# Memcached
+# MTCP-accelerated Memcached
 
-Memcached is a high performance multithreaded event-based key/value cache
-store intended to be used in a distributed system.
+## Build
 
-See: https://memcached.org/about
+Firtsly we need to compile mTCP
 
-A fun story explaining usage: https://memcached.org/tutorial
+```bash
+cd memcached/third_party/mtcp
+./configure --with-dpdk-lib=$RTE_SDK/$RTE_TARGET
+make
+```
 
-If you're having trouble, try the wiki: https://memcached.org/wiki
+Then we need to build and install mTCP-accelerated libevent
 
-If you're trying to troubleshoot odd behavior or timeouts, see:
-https://memcached.org/timeouts
+```bash
+cd ./third_party/libevent
+mkdir build && cd build
+cmake ..
+make
+make install
+```
 
-https://memcached.org/ is a good resource in general. Please use the mailing
-list to ask questions, github issues aren't seen by everyone!
+Then we need to build and run `dpdk-iface` which mTCP provides to manage DPDK-controlled NIC
 
-## Dependencies
+```bash
+cd ./third_party/dpdk-iface-kmod
+export RTE_SDK=/usr/src/dpdk-21.11
+make
+insmod dpdk_iface.ko
+./dpdk_iface_main
+```
 
-* libevent - https://www.monkey.org/~provos/libevent/ (libevent-dev)
-* libseccomp (optional, experimental, linux) - enables process restrictions for
-  better security. Tested only on x86-64 architectures.
-* openssl (optional) - enables TLS support. need relatively up to date
-  version. pkg-config is needed to find openssl dependencies (such as -lz).
+To build memcached in your machine from local repo you will have to install
+autotools, automake and libevent. In a debian based system that will look
+like this
 
-## Environment
+```bash
+sudo apt-get install autotools-dev
+sudo apt-get install automake
+sudo apt-get install libevent-dev
+```
 
-Be warned that the -k (mlockall) option to memcached might be
-dangerous when using a large cache. Just make sure the memcached machines
-don't swap.  memcached does non-blocking network I/O, but not disk.  (it
-should never go to disk, or you've lost the whole point of it)
+After that you can build memcached binary using automake
 
-## Build status
+```bash
+cd [Root of Memcached]
+./autogen.sh
+./configure
+make
+make test
+```
 
-See https://build.memcached.org/ for multi-platform regression testing status.
+It should create the binary in the same folder, which you can run
 
-## Bug reports
+```bash
+./memcached
+```
 
-Feel free to use the issue tracker on github.
+You can telnet into that memcached to ensure it is up and running
 
-**If you are reporting a security bug** please contact a maintainer privately.
-We follow responsible disclosure: we handle reports privately, prepare a
-patch, allow notifications to vendor lists. Then we push a fix release and your
-bug can be posted publicly with credit in our release notes and commit
-history.
+```bash
+telnet 127.0.0.1 11211
+stats
+```
 
-## Website
+IF BUILDING PROXY, AN EXTRA STEP IS NECESSARY:
 
-* https://www.memcached.org
-
-## Contributing
-
-See https://github.com/memcached/memcached/wiki/DevelopmentRepos
+```bash
+cd memcached
+cd vendor
+./fetch.sh
+cd ..
+./autogen.sh
+./configure --enable-proxy
+make
+make test
+```

@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "mtcp_epoll.h": "c",
+        "mtcp_api.h": "c",
+        "event.h": "c",
+        "event-config.h": "c"
+    }
+}

@@ -336,7 +336,7 @@ AC_SEARCH_LIBS(clock_gettime, rt)
 AC_SEARCH_LIBS(socket, socket)
 AC_SEARCH_LIBS(gethostbyname, nsl)
 
-trylibeventdir=""
+trylibeventdir="./third_party/libevent/build"
 AC_ARG_WITH(libevent,
        [  --with-libevent=PATH     Specify path to libevent installation ],
        [
@@ -360,17 +360,22 @@ AC_CACHE_CHECK([for libevent directory], ac_cv_libevent_dir, [
     LDFLAGS="$saved_LDFLAGS"
     LIBS="-levent $saved_LIBS"
 
+    AC_MSG_RESULT([Try $ledir])
+
     # Skip the directory if it isn't there.
     if test ! -z "$ledir" -a ! -d "$ledir" ; then
+       AC_MSG_RESULT([$ledir not there])
        continue;
     fi
     if test ! -z "$ledir" ; then
       if test -d "$ledir/lib" ; then
+        AC_MSG_RESULT([load libevent library as $ledir/lib])
         LDFLAGS="-L$ledir/lib $LDFLAGS"
       else
         LDFLAGS="-L$ledir $LDFLAGS"
       fi
       if test -d "$ledir/include" ; then
+        AC_MSG_RESULT([load include path as $ledir/include])
         CPPFLAGS="-I$ledir/include $CPPFLAGS"
       else
         CPPFLAGS="-I$ledir $CPPFLAGS"
@@ -382,6 +387,7 @@ AC_CACHE_CHECK([for libevent directory], ac_cv_libevent_dir, [
 #include <event.h>], [ event_init(); ],
        [ libevent_linked=yes ], [ libevent_linked=no ])
     if test $libevent_linked = yes; then
+      AC_MSG_RESULT([successfully link!])
        if test ! -z "$ledir" ; then
          ac_cv_libevent_dir=$ledir
          _myos=`echo $target_os | cut -f 1 -d .`
@@ -394,6 +400,8 @@ AC_CACHE_CHECK([for libevent directory], ac_cv_libevent_dir, [
        fi
        le_found=yes
        break
+    else
+      AC_MSG_RESULT([failed to link!])
     fi
   done
   LIBS="$saved_LIBS"

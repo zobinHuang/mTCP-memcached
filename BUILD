@@ -2,7 +2,7 @@ See below if building the proxy
 
 Firtsly we need to compile mTCP
 
-cd memcached/third_party/mTCP
+cd memcached/third_party/mtcp
 ./configure --with-dpdk-lib=$RTE_SDK/$RTE_TARGET
 make
 
