@@ -71,8 +71,12 @@
 static void drive_machine(conn *c);
 static int new_socket(struct addrinfo *ai);
 static ssize_t tcp_read(conn *arg, void *buf, size_t count);
-static ssize_t tcp_sendmsg(conn *arg, struct msghdr *msg, int flags);
+static ssize_t tcp_sendmsg(conn *c, struct msghdr *msg, int flags);
 static ssize_t tcp_write(conn *arg, void *buf, size_t count);
+static ssize_t f_mtcp_read(conn *c, void *buf, size_t count);
+static ssize_t f_mtcp_sendmsg(conn *c, struct msghdr *msg, int flags);
+static ssize_t f_mtcp_write(conn *c, void *buf, size_t count);
+
 
 enum try_read_result {
     READ_DATA_RECEIVED,
@@ -112,9 +116,6 @@ struct settings settings;
 time_t process_started;     /* when the process was started */
 conn **conns;
 
-/* MTCP Context */
-mctx_t mctx;
-
 struct slab_rebalance slab_rebal;
 volatile int slab_rebalance_signal;
 #ifdef EXTSTORE
@@ -153,7 +154,23 @@ ssize_t tcp_write(conn *c, void *buf, size_t count) {
 
 ssize_t f_mtcp_read(conn *c, void *buf, size_t count) {
     assert (c != NULL);
-    return 0;
+    mctx_t mctx = get_mctx_from_event_base(c->event.ev_base);
+    int num = mtcp_read(mctx, c->sfd, buf, count);
+    fprintf(stdout, "mtcp read: %s\n", buf);
+    return num;
+}
+
+ssize_t f_mtcp_sendmsg(conn *c, struct msghdr *msg, int flags) {
+    assert (c != NULL);
+    mctx_t mctx = get_mctx_from_event_base(c->event.ev_base);
+    return mtcp_writev(mctx, c->sfd, msg->msg_iov, msg->msg_iovlen);
+}
+
+ssize_t f_mtcp_write(conn *c, void *buf, size_t count) {
+    assert (c != NULL);
+    mctx_t mctx = get_mctx_from_event_base(c->event.ev_base);
+    fprintf(stdout, "mtcp write: %s\n", buf);
+    return mtcp_write(mctx, c->sfd, buf, count);
 }
 
 static enum transmit_result transmit(conn *c);
@@ -259,7 +276,7 @@ static void settings_init(void) {
     settings.auth_file = NULL;        /* by default, not using ASCII authentication tokens */
     settings.factor = 1.25;
     settings.chunk_size = 48;         /* space for a modest key and value */
-    settings.num_threads = 4;         /* N workers */
+    settings.num_threads = 1;         /* N workers */
     settings.num_threads_per_udp = 0;
     settings.prefix_delimiter = ':';
     settings.detail_enabled = 0;
@@ -432,13 +449,16 @@ static void rbuf_release(conn *c) {
 
 static bool rbuf_alloc(conn *c) {
     if (c->rbuf == NULL) {
+        fprintf(stdout, "c->rbuf == NULL\n");
         c->rbuf = do_cache_alloc(c->thread->rbuf_cache);
         if (!c->rbuf) {
+            fprintf(stdout, "do_cache_alloc failed!\n");
             THR_STATS_LOCK(c);
             c->thread->stats.read_buf_oom++;
             THR_STATS_UNLOCK(c);
             return false;
         }
+        fprintf(stdout, "do_cache_alloc success!\n");
         c->rsize = READ_BUFFER_SIZE;
         c->rcurr = c->rbuf;
     }
@@ -665,6 +685,8 @@ conn *conn_new(const int sfd, enum conn_states init_state,
                 enum protocol bproto) {
     conn *c;
 
+    fprintf(stdout, "try to create new conn instance on thread core\n");
+
     assert(sfd >= 0 && sfd < max_fds);
     c = conns[sfd];
 
@@ -721,11 +743,11 @@ conn *conn_new(const int sfd, enum conn_states init_state,
     }
 
     if (transport == tcp_transport && init_state == conn_new_cmd) {
-        if (getpeername(sfd, (struct sockaddr *) &c->request_addr,
-                        &c->request_addr_size)) {
-            perror("getpeername");
-            memset(&c->request_addr, 0, sizeof(c->request_addr));
-        }
+        // if (getpeername(sfd, (struct sockaddr *) &c->request_addr,
+        //                 &c->request_addr_size)) {
+        //     perror("getpeername");
+        //     memset(&c->request_addr, 0, sizeof(c->request_addr));
+        // }
     }
 
     if (init_state == conn_new_cmd) {
@@ -797,9 +819,13 @@ conn *conn_new(const int sfd, enum conn_states init_state,
     assert(ssl == NULL);
 #endif
     {
-        c->read = tcp_read;
-        c->sendmsg = tcp_sendmsg;
-        c->write = tcp_write;
+        // c->read = tcp_read;
+        // c->sendmsg = tcp_sendmsg;
+        // c->write = tcp_write;
+
+        c->read = f_mtcp_read;
+        c->sendmsg = f_mtcp_sendmsg;
+        c->write = f_mtcp_write;
     }
 
     if (IS_UDP(transport)) {
@@ -958,7 +984,7 @@ static void conn_close(conn *c) {
         SSL_free(c->ssl);
     }
 #endif
-    mtcp_close(mctx, c->sfd);
+    mtcp_close(c->mctx, c->sfd);
     c->close_reason = 0;
     pthread_mutex_lock(&conn_lock);
     allow_new_conns = true;
@@ -1442,10 +1468,13 @@ static void reset_cmd_handler(conn *c) {
         c->item = NULL;
     }
     if (c->rbytes > 0) {
+        fprintf(stdout, "change state: conn_parse_cmd\n");
         conn_set_state(c, conn_parse_cmd);
     } else if (c->resp_head) {
+        fprintf(stdout, "change state: conn_mwrite\n");
         conn_set_state(c, conn_mwrite);
     } else {
+        fprintf(stdout, "change state: conn_waiting\n");
         conn_set_state(c, conn_waiting);
     }
 }
@@ -2480,6 +2509,7 @@ static enum try_read_result try_read_network(conn *c) {
         int avail = c->rsize - c->rbytes;
         res = c->read(c, c->rbuf + c->rbytes, avail);
         if (res > 0) {
+            fprintf(stdout, "readout %d bytes!\n", res);
             pthread_mutex_lock(&c->thread->stats.mutex);
             c->thread->stats.bytes_read += res;
             pthread_mutex_unlock(&c->thread->stats.mutex);
@@ -2694,6 +2724,7 @@ static void _transmit_post(conn *c, ssize_t res) {
  *   TRANSMIT_HARD_ERROR Can't write (c->state is set to conn_closing)
  */
 static enum transmit_result transmit(conn *c) {
+    fprintf(stdout, "enter transmit\n");
     assert(c != NULL);
     struct iovec iovs[IOV_MAX];
     struct msghdr msg;
@@ -2711,7 +2742,26 @@ static enum transmit_result transmit(conn *c) {
         return TRANSMIT_COMPLETE;
     }
 
+    // // create sendbuf
+    // int sb_size = 0;
+    // for(int i=0; i<iovused; i++){
+    //     sb_size += iovs[i].iov_len;
+    // }
+    // char *sendbuf = (char*)malloc(sb_size*sizeof(char));
+    
+    // // make sendbuf
+    // int sb_pointer = 0;
+    // for(int i=0; i<iovused; i++){
+    //     memcpy(sendbuf+sb_pointer, iovs[i].iov_base, iovs[i].iov_len);
+    //     sb_pointer += iovs[i].iov_len;
+    // }
+
+    // fprintf(stdout, "Alright, send.\n");
+    // ssize_t res;
+    // res = c->write(c, sendbuf, sb_size);
+
     // Alright, send.
+    fprintf(stdout, "Alright, send.\n");
     ssize_t res;
     msg.msg_iovlen = iovused;
     res = c->sendmsg(c, &msg, 0);
@@ -2994,7 +3044,7 @@ static void drive_machine(conn *c) {
             fprintf(stdout, "listening port recv connect request!\n");
             
             // only the main thread could accept, so we directly use global mctx here
-            int sfd = mtcp_accept(mctx, c->sfd, NULL, NULL);
+            int sfd = mtcp_accept(c->mctx, c->sfd, NULL, NULL);
             if( sfd < 0 ){
                 fprintf(stderr, "Failed to mtcp_accept connection: %s\n", strerror(errno));
             }
@@ -3013,7 +3063,7 @@ static void drive_machine(conn *c) {
 
             if (reject) {
                 fprintf(stderr, "ERROR Too many open connections\r\n");
-                mtcp_close(mctx, sfd);
+                mtcp_close(c->mctx, sfd);
             } else {
                 void *ssl_v = NULL;
 #ifdef TLS
@@ -3058,8 +3108,20 @@ static void drive_machine(conn *c) {
                 ssl_v = (void*) ssl;
 #endif
 
-                dispatch_conn_new(sfd, conn_new_cmd, EV_READ | EV_PERSIST,
-                                     READ_BUFFER_CACHED, c->transport, ssl_v, c->tag, c->protocol);
+                // We don't dispatch here, we just let each thread to process its own accepted connections
+                // dispatch_conn_new(sfd, conn_new_cmd, EV_READ | EV_PERSIST,
+                //                       READ_BUFFER_CACHED, c->transport, ssl_v, c->tag, c->protocol);
+
+                // create new connection instance, conntinue to use current event base
+                conn* new_c = conn_new(sfd, conn_new_cmd, EV_READ | EV_PERSIST,
+                                   READ_BUFFER_CACHED, c->transport,
+                                   c->event.ev_base, ssl_v, c->tag, c->protocol);
+                
+                new_c->mctx = c->mctx;
+                new_c->thread = c->thread;
+                conn_io_queue_setup(new_c);
+                drive_machine(new_c);
+                fprintf(stdout, "finish acceptance process, connection state: %d\n", c->state);
             }
 
             fprintf(stdout, "accept connection!\n");
@@ -3075,36 +3137,45 @@ static void drive_machine(conn *c) {
                 break;
             }
 
+            fprintf(stdout, "set state: conn_read\n");
             conn_set_state(c, conn_read);
             stop = true;
             break;
 
         case conn_read:
+            fprintf(stdout, "invoke read!\n");
             if (!IS_UDP(c->transport)) {
                 // Assign a read buffer if necessary.
                 if (!rbuf_alloc(c)) {
                     // TODO: Some way to allow for temporary failures.
+                    fprintf(stdout, "failed to allocate read buf!\n");
                     conn_set_state(c, conn_closing);
                     break;
                 }
+                fprintf(stdout, "try read tcp network\n");
                 res = try_read_network(c);
             } else {
                 // UDP connections always have a static buffer.
+                fprintf(stdout, "try read udp network\n");
                 res = try_read_udp(c);
             }
 
             switch (res) {
             case READ_NO_DATA_RECEIVED:
+                fprintf(stdout, "change state: conn_waiting\n");
                 conn_set_state(c, conn_waiting);
                 break;
             case READ_DATA_RECEIVED:
+                fprintf(stdout, "change state: conn_parse_cmd\n");
                 conn_set_state(c, conn_parse_cmd);
                 break;
             case READ_ERROR:
+                fprintf(stdout, "change state: conn_closing\n");
                 conn_set_state(c, conn_closing);
                 break;
             case READ_MEMORY_ERROR: /* Failed to allocate more memory */
                 /* State already set by try_read_network */
+                fprintf(stdout, "read memory error\n");
                 break;
             }
             break;
@@ -3115,8 +3186,10 @@ static void drive_machine(conn *c) {
                 /* we need more data! */
                 if (c->resp_head) {
                     // Buffered responses waiting, flush in the meantime.
+                    fprintf(stdout, "change state conn_mwrite\n");
                     conn_set_state(c, conn_mwrite);
                 } else {
+                    fprintf(stdout, "change state conn_waiting\n");
                     conn_set_state(c, conn_waiting);
                 }
             }
@@ -3126,12 +3199,14 @@ static void drive_machine(conn *c) {
         case conn_new_cmd:
             /* Only process nreqs at a time to avoid starving other
                connections */
-
+            fprintf(stdout, "enter conn_new_cmd\n");
             --nreqs;
             if (nreqs >= 0) {
+                fprintf(stdout, "reset cmd handler\n");
                 reset_cmd_handler(c);
             } else if (c->resp_head) {
                 // flush response pipe on yield.
+                fprintf(stdout, "change state as conn_mwrite\n");
                 conn_set_state(c, conn_mwrite);
             } else {
                 pthread_mutex_lock(&c->thread->stats.mutex);
@@ -3292,6 +3367,7 @@ static void drive_machine(conn *c) {
 
         case conn_write:
         case conn_mwrite:
+            fprintf(stdout, "enter state conn_mwrite\n");
             /* have side IO's that must process before transmit() can run.
              * remove the connection from the worker thread and dispatch the
              * IO queue
@@ -3306,15 +3382,18 @@ static void drive_machine(conn *c) {
                 }
             }
             if (c->io_queues_submitted != 0) {
+                fprintf(stdout, "change state conn_io_queue\n");
                 conn_set_state(c, conn_io_queue);
                 event_del(&c->event);
-
+                
                 stop = true;
                 break;
             }
 
+            fprintf(stdout, "try to send back result\n");
             switch (!IS_UDP(c->transport) ? transmit(c) : transmit_udp(c)) {
             case TRANSMIT_COMPLETE:
+                fprintf(stdout, "conn_mwrite TRANSMIT_COMPLETE\n");
                 if (c->state == conn_mwrite) {
                     // Free up IO wraps and any half-uploaded items.
                     conn_release_items(c);
@@ -3331,9 +3410,12 @@ static void drive_machine(conn *c) {
 
             case TRANSMIT_INCOMPLETE:
             case TRANSMIT_HARD_ERROR:
+                fprintf(stdout, "conn_mwrite TRANSMIT_INCOMPLETE & TRANSMIT_HARD_ERROR\n");
+                fprintf(stdout, "state: %d\n", c->state);
                 break;                   /* Continue in state machine. */
 
             case TRANSMIT_SOFT_ERROR:
+                fprintf(stdout, "conn_mwrite TRANSMIT_SOFT_ERROR\n");
                 stop = true;
                 break;
             }
@@ -3367,6 +3449,7 @@ static void drive_machine(conn *c) {
         }
     }
 
+    fprintf(stdout, "drive machine exits\n");
     return;
 }
 
@@ -3893,58 +3976,8 @@ static int server_socket(const char *interface,
                          FILE *portnumber_file, bool ssl_enabled,
                          uint64_t conntag,
                          enum protocol bproto) {
-    int ret;
-    conn *listen_conn_add;
-
-    // create listen port
-    int listen_sock = mtcp_socket(mctx, AF_INET, SOCK_STREAM, 0);
-    if(listen_sock < 0){
-        fprintf(stderr, "failed to create mtcp socket for listening, exits\n");
-        goto create_exit;
-    }
-    ret = mtcp_setsock_nonblock(mctx, listen_sock);
-    if(ret < 0){
-        fprintf(stderr, "failed to set listen socket as non-blocking mode, exits\n");
-        goto close_mtcp_socket;
-    }
-
-    // bind socket to port
-    struct sockaddr_in saddr;
-    saddr.sin_family = AF_INET;
-	saddr.sin_addr.s_addr = INADDR_ANY;
-    saddr.sin_port = htons(11103);
-	// saddr.sin_port = htons(SOCKET_SERVER_PORT);
-	ret = mtcp_bind(mctx, listen_sock, 
-			(struct sockaddr *)&saddr, sizeof(struct sockaddr_in));
-	if (ret < 0) {
-		fprintf(stderr, "failed to bind to the listening socket, exits\n");
-		goto close_mtcp_socket;
-	}
-
-    // set as listen mode
-    ret = mtcp_listen(mctx, listen_sock, 4096);
-    if (ret < 0) {
-		fprintf(stderr, "failed to set mtcp socket as listen mode\n");
-		goto close_mtcp_socket;
-	}
-
-    // create new connection
-    if (!(listen_conn_add = conn_new(listen_sock, conn_listening,
-                                     EV_READ | EV_PERSIST, 1,
-                                     transport, main_base, NULL, conntag, bproto))) {
-        fprintf(stderr, "failed to create listening connection\n");
-        goto close_mtcp_socket;
-    }
-
-    listen_conn = listen_conn_add;
-
-    return 0;
-
-close_mtcp_socket:
-    mtcp_close(mctx, listen_sock);
-
-create_exit:
     exit(1);
+    return 0;
 }
 
 static int server_socket_old(const char *interface,
@@ -6445,7 +6478,7 @@ int main (int argc, char **argv) {
 
     /* Create MTCP Context */
     // config number of core to run mtcp
-    static int core_limit = 8;
+    static int core_limit = 1;
     static char* conf_file = "./mtcp_conf/server.conf";
 
     struct mtcp_conf mcfg;
@@ -6459,18 +6492,18 @@ int main (int argc, char **argv) {
         exit(1);
     }
 
-    mctx = mtcp_create_context(0);
-    if(!mctx){
-        fprintf(stderr, "failed to create mtcp context, exits\n");
-        exit(1);
-    }
+    // mctx = mtcp_create_context(0);
+    // if(!mctx){
+    //     fprintf(stderr, "failed to create mtcp context, exits\n");
+    //     exit(1);
+    // }
 
     /* initialize main thread libevent instance */
 #if defined(LIBEVENT_VERSION_NUMBER) && LIBEVENT_VERSION_NUMBER >= 0x02000101
     /* If libevent version is larger/equal to 2.0.2-alpha, use newer version */
     struct event_config *ev_config;
     ev_config = event_config_new();
-    event_config_set_mctp(ev_config, mctx);
+    // event_config_set_mctp(ev_config, mctx);
     event_config_set_flag(ev_config, EVENT_BASE_FLAG_NOLOCK);
     main_base = event_base_new_with_config(ev_config);
     event_config_free(ev_config);
@@ -6670,78 +6703,78 @@ int main (int argc, char **argv) {
     }
 
     /* create the listening socket, bind it, and init */
-    if (settings.socketpath == NULL) {
-        const char *portnumber_filename = getenv("MEMCACHED_PORT_FILENAME");
-        char *temp_portnumber_filename = NULL;
-        size_t len;
-        FILE *portnumber_file = NULL;
+    // if (settings.socketpath == NULL) {
+    //     const char *portnumber_filename = getenv("MEMCACHED_PORT_FILENAME");
+    //     char *temp_portnumber_filename = NULL;
+    //     size_t len;
+    //     FILE *portnumber_file = NULL;
 
-        if (portnumber_filename != NULL) {
-            len = strlen(portnumber_filename)+4+1;
-            temp_portnumber_filename = malloc(len);
-            snprintf(temp_portnumber_filename,
-                     len,
-                     "%s.lck", portnumber_filename);
+    //     if (portnumber_filename != NULL) {
+    //         len = strlen(portnumber_filename)+4+1;
+    //         temp_portnumber_filename = malloc(len);
+    //         snprintf(temp_portnumber_filename,
+    //                  len,
+    //                  "%s.lck", portnumber_filename);
 
-            portnumber_file = fopen(temp_portnumber_filename, "a");
-            if (portnumber_file == NULL) {
-                fprintf(stderr, "Failed to open \"%s\": %s\n",
-                        temp_portnumber_filename, strerror(errno));
-            }
-        }
+    //         portnumber_file = fopen(temp_portnumber_filename, "a");
+    //         if (portnumber_file == NULL) {
+    //             fprintf(stderr, "Failed to open \"%s\": %s\n",
+    //                     temp_portnumber_filename, strerror(errno));
+    //         }
+    //     }
 
-        errno = 0;
-        if (settings.port && server_sockets(settings.port, tcp_transport,
-                                           portnumber_file)) {
-            if (settings.inter == NULL) {
-                vperror("failed to listen on TCP port %d", settings.port);
-            } else {
-                vperror("failed to listen on one of interface(s) %s", settings.inter);
-            }
-            exit(EX_OSERR);
-        }
+    //     errno = 0;
+    //     if (settings.port && server_sockets(settings.port, tcp_transport,
+    //                                        portnumber_file)) {
+    //         if (settings.inter == NULL) {
+    //             vperror("failed to listen on TCP port %d", settings.port);
+    //         } else {
+    //             vperror("failed to listen on one of interface(s) %s", settings.inter);
+    //         }
+    //         exit(EX_OSERR);
+    //     }
 
-        /*
-         * initialization order: first create the listening sockets
-         * (may need root on low ports), then drop root if needed,
-         * then daemonize if needed, then init libevent (in some cases
-         * descriptors created by libevent wouldn't survive forking).
-         */
+    //     /*
+    //      * initialization order: first create the listening sockets
+    //      * (may need root on low ports), then drop root if needed,
+    //      * then daemonize if needed, then init libevent (in some cases
+    //      * descriptors created by libevent wouldn't survive forking).
+    //      */
 
-        /* create the UDP listening socket and bind it */
-        errno = 0;
+    //     /* create the UDP listening socket and bind it */
+    //     errno = 0;
 
-        if (settings.udpport){
-            fprintf(stderr, "UDP is not allowed\n");
-            exit(EX_OSERR);
-        }
+    //     if (settings.udpport){
+    //         fprintf(stderr, "UDP is not allowed\n");
+    //         exit(EX_OSERR);
+    //     }
 
-        // if (settings.udpport && server_sockets(settings.udpport, udp_transport,
-        //                                       portnumber_file)) {
-        //     if (settings.inter == NULL) {
-        //         vperror("failed to listen on UDP port %d", settings.udpport);
-        //     } else {
-        //         vperror("failed to listen on one of interface(s) %s", settings.inter);
-        //     }
-        //     exit(EX_OSERR);
-        // }
+    //     // if (settings.udpport && server_sockets(settings.udpport, udp_transport,
+    //     //                                       portnumber_file)) {
+    //     //     if (settings.inter == NULL) {
+    //     //         vperror("failed to listen on UDP port %d", settings.udpport);
+    //     //     } else {
+    //     //         vperror("failed to listen on one of interface(s) %s", settings.inter);
+    //     //     }
+    //     //     exit(EX_OSERR);
+    //     // }
 
-        if (portnumber_file) {
-            fclose(portnumber_file);
-            rename(temp_portnumber_filename, portnumber_filename);
-        }
-        if (temp_portnumber_filename)
-            free(temp_portnumber_filename);
-    }
+    //     if (portnumber_file) {
+    //         fclose(portnumber_file);
+    //         rename(temp_portnumber_filename, portnumber_filename);
+    //     }
+    //     if (temp_portnumber_filename)
+    //         free(temp_portnumber_filename);
+    // }
 
     /* Give the sockets a moment to open. I know this is dumb, but the error
      * is only an advisory.
      */
-    usleep(1000);
-    if (stats_state.curr_conns + stats_state.reserved_fds >= settings.maxconns - 1) {
-        fprintf(stderr, "Maxconns setting is too low, use -c to increase.\n");
-        exit(EXIT_FAILURE);
-    }
+    // usleep(1000);
+    // if (stats_state.curr_conns + stats_state.reserved_fds >= settings.maxconns - 1) {
+    //     fprintf(stderr, "Maxconns setting is too low, use -c to increase.\n");
+    //     exit(EXIT_FAILURE);
+    // }
 
     if (pid_file != NULL) {
         save_pid(pid_file);

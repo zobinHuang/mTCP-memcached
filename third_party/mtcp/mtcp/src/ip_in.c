@@ -58,6 +58,7 @@ ProcessIPv4Packet(mtcp_manager_t mtcp, uint32_t cur_ts,
 			TRACE_CONFIG("It's a ICMP Packet\n");
 			return ProcessICMPPacket(mtcp, iph, ip_len);
 		default:
+			TRACE_CONFIG("Drop unknown Packet\n");
 			/* currently drop other protocols */
 			return FALSE;
 	}

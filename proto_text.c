@@ -436,6 +436,7 @@ int try_read_command_asciiauth(conn *c) {
 }
 
 int try_read_command_ascii(conn *c) {
+    fprintf(stdout, "enter try_read_command_ascii\n");
     char *el, *cont;
 
     if (c->rbytes == 0)
@@ -1340,8 +1341,11 @@ static void process_mget_command(conn *c, token_t *tokens, const size_t ntokens)
         // This gets elided in noreply mode.
         out_string(c, "EN");
     }
+
+    fprintf(stdout, "mget finished!\n");
     return;
 error:
+    fprintf(stdout, "mget error!\n");
     if (it) {
         do_item_remove(it);
         if (of.locked) {
@@ -2714,7 +2718,7 @@ static void process_refresh_certs_command(conn *c, token_t *tokens, const size_t
 // Leaving this note here to spend more time on a fix when necessary, or if an
 // opportunity becomes obvious.
 void process_command_ascii(conn *c, char *command) {
-
+    fprintf(stdout, "enter process_command_ascii, command: %s\n", command);
     token_t tokens[MAX_TOKENS];
     size_t ntokens;
     int comm;
@@ -2744,6 +2748,12 @@ void process_command_ascii(conn *c, char *command) {
         out_string(c, "ERROR");
         return;
     }
+
+    // print tokens for debugging
+    for(int i=0; i<ntokens; i++){
+        fprintf(stdout, "token %d: %s\n", i, tokens[i].value);
+    }
+
 
     // Meta commands are all 2-char in length.
     char first = tokens[COMMAND_TOKEN].value[0];

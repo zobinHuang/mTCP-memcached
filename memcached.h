@@ -705,6 +705,11 @@ typedef struct {
     pthread_t thread_id;        /* unique ID of this thread */
     struct event_base *base;    /* libevent handle this thread uses */
     struct event notify_event;  /* listen event for notify pipe */
+
+    struct conn* listen_conn;   /* listen connection */
+    int cpu_id;                 /* the id of running cpu*/
+    mctx_t mctx;                /* the id of mtcp context*/
+
 #ifdef HAVE_EVENTFD
     int notify_event_fd;        /* notify counter */
 #else
@@ -812,6 +817,8 @@ struct conn {
     struct event event;
     short  ev_flags;
     short  which;   /** which events were just triggered */
+    
+    mctx_t mctx;
 
     char   *rbuf;   /** buffer to read commands into */
     char   *rcurr;  /** but if we parsed some already, this is where we stopped */

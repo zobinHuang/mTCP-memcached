@@ -406,37 +406,7 @@ void accept_new_conns(const bool do_accept) {
  * Set up a thread's information.
  */
 static void setup_thread(LIBEVENT_THREAD *me, int cpu_id) {
-#if defined(LIBEVENT_VERSION_NUMBER) && LIBEVENT_VERSION_NUMBER >= 0x02000101
-    struct event_config *ev_config;
-    mctx_t mctx = mtcp_create_context(cpu_id);
-    ev_config = event_config_new();
-    event_config_set_mctp(ev_config, mctx);
-    event_config_set_flag(ev_config, EVENT_BASE_FLAG_NOLOCK);
-    me->base = event_base_new_with_config(ev_config);
-    event_config_free(ev_config);
-#else
-    me->base = event_init();
-#endif
-
-    if (! me->base) {
-        fprintf(stderr, "Can't allocate event base\n");
-        exit(1);
-    }
-
-    /* Listen for notifications from other threads */
-#ifdef HAVE_EVENTFD
-    event_set(&me->notify_event, me->notify_event_fd,
-              EV_READ | EV_PERSIST, thread_libevent_process, me);
-#else
-    event_set(&me->notify_event, me->notify_receive_fd,
-              EV_READ | EV_PERSIST, thread_libevent_process, me);
-#endif
-    event_base_set(me->base, &me->notify_event);
-
-    if (event_add(&me->notify_event, 0) == -1) {
-        fprintf(stderr, "Can't monitor libevent notify pipe\n");
-        exit(1);
-    }
+    me->cpu_id = cpu_id;
 
     me->ev_queue = malloc(sizeof(struct conn_queue));
     if (me->ev_queue == NULL) {
@@ -506,6 +476,97 @@ static void setup_thread(LIBEVENT_THREAD *me, int cpu_id) {
  */
 static void *worker_libevent(void *arg) {
     LIBEVENT_THREAD *me = arg;
+    int ret;
+    conn *listen_conn_add;
+    
+    // config mtcp context
+    me->cpu_id = sched_getcpu();
+    mctx_t mctx = mtcp_create_context(sched_getcpu());
+    fprintf(stdout, "running mctp context on core %d\n", me->cpu_id);
+
+    // create listen port
+    int listen_sock = mtcp_socket(mctx, AF_INET, SOCK_STREAM, 0);
+    if(listen_sock < 0){
+        fprintf(stderr, "failed to create mtcp socket for listening, exits\n");
+        exit(1);
+    }
+    ret = mtcp_setsock_nonblock(mctx, listen_sock);
+    if(ret < 0){
+        fprintf(stderr, "failed to set listen socket as non-blocking mode, exits\n");
+        mtcp_close(mctx, listen_sock);
+        exit(1);
+    }
+    
+    // bind socket to port
+    struct sockaddr_in saddr;
+    saddr.sin_family = AF_INET;
+	saddr.sin_addr.s_addr = INADDR_ANY;
+    saddr.sin_port = htons(11103);
+	// saddr.sin_port = htons(SOCKET_SERVER_PORT);
+	ret = mtcp_bind(mctx, listen_sock, 
+			(struct sockaddr *)&saddr, sizeof(struct sockaddr_in));
+	if (ret < 0) {
+		fprintf(stderr, "failed to bind to the listening socket, exits\n");
+		mtcp_close(mctx, listen_sock);
+        exit(1);
+	}
+    fprintf(stdout, "bind to port %u (htons: %u)", 11103, htons(11103));
+
+    // set as listen mode
+    ret = mtcp_listen(mctx, listen_sock, 4096);
+    if (ret < 0) {
+		fprintf(stderr, "failed to set mtcp socket as listen mode\n");
+		mtcp_close(mctx, listen_sock);
+        exit(1);
+	}
+    fprintf(stdout, "set mtcp socket as listen mode\n");
+    
+    // setup event base
+#if defined(LIBEVENT_VERSION_NUMBER) && LIBEVENT_VERSION_NUMBER >= 0x02000101
+    struct event_config *ev_config;
+    ev_config = event_config_new();
+    event_config_set_mctp(ev_config, mctx);
+    event_config_set_flag(ev_config, EVENT_BASE_FLAG_NOLOCK);
+    me->base = event_base_new_with_config(ev_config);
+    event_config_free(ev_config);
+#else
+    me->base = event_init();
+#endif
+
+    if (! me->base) {
+        fprintf(stderr, "Can't allocate event base\n");
+        exit(1);
+    }
+
+    // create new connection
+    // the callback of mtcp_epoll is setup here
+    if (!(listen_conn_add = conn_new(listen_sock, conn_listening,
+                                     EV_READ | EV_PERSIST, 0,
+                                     tcp_transport, me->base, NULL, 0, ascii_prot))) {
+        fprintf(stderr, "failed to create listening connection\n");
+        mtcp_close(mctx, listen_sock);
+        exit(1);
+    }
+
+    me->mctx = mctx;
+    me->listen_conn = listen_conn_add;
+    listen_conn_add->thread = me;
+    listen_conn_add->mctx = mctx;
+
+    /* Listen for notifications from other threads */
+// #ifdef HAVE_EVENTFD
+//     event_set(&me->notify_event, me->notify_event_fd,
+//               EV_READ | EV_PERSIST, thread_libevent_process, me);
+// #else
+//     event_set(&me->notify_event, me->notify_receive_fd,
+//               EV_READ | EV_PERSIST, thread_libevent_process, me);
+// #endif
+//     event_base_set(me->base, &me->notify_event);
+
+    // if (event_add(&me->notify_event, 0) == -1) {
+    //     fprintf(stderr, "Can't monitor libevent notify pipe\n");
+    //     exit(1);
+    // }
 
     /* Any per-thread setup can happen here; memcached_thread_init() will block until
      * all threads have finished initializing.
@@ -528,6 +589,9 @@ static void *worker_libevent(void *arg) {
     register_thread_initialized();
 
     event_base_free(me->base);
+
+    mtcp_destroy_context(mctx);
+
     return NULL;
 }
 

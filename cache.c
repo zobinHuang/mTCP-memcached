@@ -3,7 +3,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include <assert.h>
-
+#include <stdio.h>
 #ifndef NDEBUG
 #include <signal.h>
 #endif
@@ -73,9 +73,11 @@ void* cache_alloc(cache_t *cache) {
 }
 
 void* do_cache_alloc(cache_t *cache) {
+    fprintf(stdout, "enter do_cache_alloc\n");
     void *ret;
     void *object;
     if (cache->freecurr > 0) {
+        fprintf(stdout, "free element in current cache is %d\n", cache->freecurr);
         ret = STAILQ_FIRST(&cache->head);
         STAILQ_REMOVE_HEAD(&cache->head, c_next);
         object = get_object(ret);
@@ -86,6 +88,8 @@ void* do_cache_alloc(cache_t *cache) {
             object = get_object(ret);
 
             cache->total++;
+        } else {
+            fprintf(stdout, "failed to malloc object\n");
         }
     } else {
         object = NULL;
