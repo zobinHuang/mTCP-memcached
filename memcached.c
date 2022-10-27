@@ -276,7 +276,7 @@ static void settings_init(void) {
     settings.auth_file = NULL;        /* by default, not using ASCII authentication tokens */
     settings.factor = 1.25;
     settings.chunk_size = 48;         /* space for a modest key and value */
-    settings.num_threads = 1;         /* N workers */
+    settings.num_threads = 2;         /* N workers */
     settings.num_threads_per_udp = 0;
     settings.prefix_delimiter = ':';
     settings.detail_enabled = 0;
@@ -6478,7 +6478,7 @@ int main (int argc, char **argv) {
 
     /* Create MTCP Context */
     // config number of core to run mtcp
-    static int core_limit = 1;
+    const int core_limit = settings.num_threads;
     static char* conf_file = "./mtcp_conf/server.conf";
 
     struct mtcp_conf mcfg;

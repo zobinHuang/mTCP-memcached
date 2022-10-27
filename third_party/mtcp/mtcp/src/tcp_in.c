@@ -742,7 +742,7 @@ CreateNewFlowHTEntry(mtcp_manager_t mtcp, uint32_t cur_ts, const struct iphdr *i
 	} else {
 		TRACE_INFO("Weird packet comes\n");
 		TRACE_DBG("Weird packet comes.\n");
-		DumpIPPacket(mtcp, iph, ip_len);
+		// DumpIPPacket(mtcp, iph, ip_len);
 #ifdef DBGMSG
 		DumpIPPacket(mtcp, iph, ip_len);
 #endif

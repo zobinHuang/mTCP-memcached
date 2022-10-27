@@ -1,26 +1,39 @@
-# MTCP-accelerated Memcached
+# mTCP-accelerated Memcached
 
-## Build
+<div align="center">
+    <img src="./doc/overall.png" width="90%">
+</div>
 
-Firtsly we need to compile mTCP
+This repo contains a mTCP-accelerated Memcached implementation, based on DPDK-21.11. The main difference between origin memcached and this updated one is illustrated in the figure above. Briefly introduced, firstly the mTCP stack was modified to support DPDK 21.11; secondly the libevent library was also updated to contain epoll API from mTCP stack; finally the memcached, the origin network logic in the main thread was removed, where no listening UNIX port will be created, instead #threads of mTCP context will be created on corresponding CPU cores, and they’re all listen to the same TCP port, load balancing is rely on underlying RSS strategy.
+
+## To Build
+
+### 0. Prepare of DPDK-21.11
+
+Make sure the header and library of DPDK 21.11 are installed correctly in your machine, and both the NIC and hugepage are under correct settings [ See <a href="https://zobinhuang.github.io/sec_learning/Tech_System_And_Network/DPDK_1_Installation/">Installation of DPDK 21.11</a> for more details ];
+
+### 1. mTCP
+Firtsly we need to compile and install mTCP. We have modified some code of mTCP, see <a href="https://zobinhuang.github.io/sec_learning/Tech_System_And_Network/DPDK_mTCP_Compiled/index.html">Guide to compile mTCP with DPDK 21.11</a> for more details about making mTCP capable with DPDK 21.11.
 
 ```bash
-cd memcached/third_party/mtcp
+cd ./third_party/mtcp
 ./configure --with-dpdk-lib=$RTE_SDK/$RTE_TARGET
-make
+make install
 ```
 
-Then we need to build and install mTCP-accelerated libevent
+### 2. libevent
+Then we need to build and install mTCP-based libevent, simply run:
 
 ```bash
 cd ./third_party/libevent
 mkdir build && cd build
 cmake ..
-make
 make install
 ```
 
-Then we need to build and run `dpdk-iface` which mTCP provides to manage DPDK-controlled NIC
+### 3. Tool to manage DPDK-controlled NIC
+
+Next, we need to build and run `dpdk-iface` which mTCP provides to manage DPDK-controlled NIC
 
 ```bash
 cd ./third_party/dpdk-iface-kmod
@@ -30,7 +43,9 @@ insmod dpdk_iface.ko
 ./dpdk_iface_main
 ```
 
-To build memcached in your machine from local repo you will have to install
+### 4. Memcached
+
+To build memcached in your machine from local repo, you will have to install
 autotools, automake and libevent. In a debian based system that will look
 like this
 
@@ -47,14 +62,18 @@ cd [Root of Memcached]
 ./autogen.sh
 ./configure
 make
+
+# optional
 make test
 ```
 
 It should create the binary in the same folder, which you can run
 
 ```bash
-./memcached
+./memcached -u root
 ```
+
+## To use
 
 You can telnet into that memcached to ensure it is up and running
 

@@ -480,8 +480,7 @@ static void *worker_libevent(void *arg) {
     conn *listen_conn_add;
     
     // config mtcp context
-    me->cpu_id = sched_getcpu();
-    mctx_t mctx = mtcp_create_context(sched_getcpu());
+    mctx_t mctx = mtcp_create_context(me->cpu_id);
     fprintf(stdout, "running mctp context on core %d\n", me->cpu_id);
 
     // create listen port
@@ -1148,7 +1147,7 @@ void memcached_thread_init(int nthreads, void *arg) {
 #ifdef EXTSTORE
         threads[i].storage = arg;
 #endif
-        setup_thread(&threads[i], i+1);
+        setup_thread(&threads[i], i);
         /* Reserve three fds for the libevent base, and two for the pipe */
         stats_state.reserved_fds += 5;
     }
