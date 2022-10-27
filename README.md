@@ -6,6 +6,8 @@
 
 This repo contains a mTCP-accelerated Memcached implementation, based on DPDK-21.11. The main difference between origin memcached and this updated one is illustrated in the figure above. Briefly introduced, firstly the mTCP stack was modified to support DPDK 21.11; secondly the libevent library was also updated to contain epoll API from mTCP stack; finally the memcached, the origin network logic in the main thread was removed, where no listening UNIX port will be created, instead #threads of mTCP context will be created on corresponding CPU cores, and they’re all listen to the same TCP port, load balancing is rely on underlying RSS strategy.
 
+> :warning: mTCP is more capable with Intel NIC, which is the case in this document.
+
 ## To Build
 
 ### 0. Prepare of DPDK-21.11
@@ -20,6 +22,8 @@ cd ./third_party/mtcp
 ./configure --with-dpdk-lib=$RTE_SDK/$RTE_TARGET
 make install
 ```
+
+Please modify you network settings in configuration files under `mtcp_conf`.
 
 ### 2. libevent
 Then we need to build and install mTCP-based libevent, simply run:
@@ -41,6 +45,12 @@ export RTE_SDK=/usr/src/dpdk-21.11
 make
 insmod dpdk_iface.ko
 ./dpdk_iface_main
+```
+
+Then we need to assign IP address to the network interface `dpdk0` which the binary `dpdk_iface_main` created:
+
+```bash
+ifconfig dpdk0 10.0.109.2 netmask 255.255.255.0 up
 ```
 
 ### 4. Memcached
