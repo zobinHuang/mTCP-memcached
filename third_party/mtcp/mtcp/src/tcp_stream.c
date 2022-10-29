@@ -139,6 +139,7 @@ RaiseReadEvent(mtcp_manager_t mtcp, tcp_stream *stream)
 		}
 	} else {
 		TRACE_EPOLL("Stream %d: Raising read without a socket!\n", stream->id);
+		TRACE_CONFIG("Stream %d: Raising read without a socket!\n", stream->id);
 	}
 }
 /*---------------------------------------------------------------------------*/

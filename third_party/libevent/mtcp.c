@@ -374,7 +374,7 @@ mtcp_epoll_dispatch(struct event_base *base, struct timeval *tv){
     event_changelist_remove_all_(&base->changelist, base);
 
     EVBASE_RELEASE_LOCK(base, th_base_lock);
-
+	
 	fprintf(stdout, "start waiting, timeout: %d\n", timeout);
     res = mtcp_epoll_wait(base->mctx, mtcp_epollop->mtcp_epfd, events, mtcp_epollop->nevents, timeout);
 	fprintf(stdout, "finish waiting\n");
@@ -390,7 +390,8 @@ mtcp_epoll_dispatch(struct event_base *base, struct timeval *tv){
 		return (0);
 	}
 
-    event_debug(("%s: mtcp_epoll_wait reports %d", __func__, res));
+    event_debug(("%s: mtcp_epoll_wait reports %d\n", __func__, res));
+	fprintf(stdout, "%s: mtcp_epoll_wait reports %d\n", __func__, res);
     EVUTIL_ASSERT(res <= mtcp_epollop->nevents);
 
     for (i = 0; i < res; i++) {
@@ -408,9 +409,13 @@ mtcp_epoll_dispatch(struct event_base *base, struct timeval *tv){
 				ev |= EV_CLOSED;
 		}
 
+		fprintf(stdout, "event fd: %d, value of ev: %d, value of what: %d\n", 
+			events[i].data.sockid, ev, what);
+
 		if (!ev)
 			continue;
 
+		fprintf(stdout, "try to activate events on this base \n");
 		evmap_io_active_(base, events[i].data.sockid, ev | EV_ET);
     }
 

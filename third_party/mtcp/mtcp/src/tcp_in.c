@@ -681,7 +681,17 @@ ProcessTCPPayload(mtcp_manager_t mtcp, tcp_stream *cur_stream,
 			cur_stream->socket? cur_stream->socket->epoll & MTCP_EPOLLIN : 0, 
 			cur_stream->socket? cur_stream->socket->epoll & MTCP_EPOLLOUT : 0);
 
+	TRACE_INFO("Stream %d data arrived. "
+			"len: %d, ET: %u, IN: %u, OUT: %u\n", 
+			cur_stream->id, payloadlen, 
+			cur_stream->socket? cur_stream->socket->epoll & MTCP_EPOLLET : 0, 
+			cur_stream->socket? cur_stream->socket->epoll & MTCP_EPOLLIN : 0, 
+			cur_stream->socket? cur_stream->socket->epoll & MTCP_EPOLLOUT : 0);
+
+	struct mtcp_manager* mtcp_pointer = mtcp;
+
 	if (cur_stream->state == TCP_ST_ESTABLISHED) {
+		TRACE_INFO("Raise read event, for stream of mtcp_manager_t on core %d\n", mtcp_pointer->ctx->cpu);
 		RaiseReadEvent(mtcp, cur_stream);
 	}
 
@@ -935,6 +945,10 @@ Handle_TCP_ST_ESTABLISHED (mtcp_manager_t mtcp, uint32_t cur_ts,
 				"seq: %u, expected: %u, ack_seq: %u, expected: %u\n", 
 				cur_stream->id, seq, cur_stream->rcv_nxt, 
 				ack_seq, cur_stream->snd_nxt);
+		TRACE_INFO("Stream %d (TCP_ST_ESTABLISHED): weird SYN. "
+				"seq: %u, expected: %u, ack_seq: %u, expected: %u\n", 
+				cur_stream->id, seq, cur_stream->rcv_nxt, 
+				ack_seq, cur_stream->snd_nxt);
 		cur_stream->snd_nxt = ack_seq;
 		AddtoControlList(mtcp, cur_stream, cur_ts);
 		return;
@@ -943,6 +957,7 @@ Handle_TCP_ST_ESTABLISHED (mtcp_manager_t mtcp, uint32_t cur_ts,
 	if (payloadlen > 0) {
 		if (ProcessTCPPayload(mtcp, cur_stream, 
 				cur_ts, payload, seq, payloadlen)) {
+
 			/* if return is TRUE, send ACK */
 			EnqueueACK(mtcp, cur_stream, cur_ts, ACK_OPT_AGGREGATE);
 		} else {

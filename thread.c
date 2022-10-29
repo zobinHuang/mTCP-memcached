@@ -18,6 +18,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <sched.h>
+
 
 #include "queue.h"
 
@@ -471,6 +474,20 @@ static void setup_thread(LIBEVENT_THREAD *me, int cpu_id) {
     thread_io_queue_add(me, IO_QUEUE_NONE, NULL, NULL, NULL, NULL, NULL);
 }
 
+
+int stick_this_thread_to_core(int core_id) {
+   int num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+   if (core_id < 0 || core_id >= num_cores)
+      return EINVAL;
+
+   cpu_set_t cpuset;
+   CPU_ZERO(&cpuset);
+   CPU_SET(core_id, &cpuset);
+
+   pthread_t current_thread = pthread_self();    
+   return pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+}
+
 /*
  * Worker thread: main event loop
  */
@@ -479,6 +496,12 @@ static void *worker_libevent(void *arg) {
     int ret;
     conn *listen_conn_add;
     
+    // if(stick_this_thread_to_core(me->cpu_id) != 0)
+    //     fprintf(stdout, "failed to bind the thread to core %d\n", me->cpu_id);
+    
+    if(mtcp_core_affinitize(me->cpu_id) != 0)
+        fprintf(stdout, "failed to bind the mtcp thread to core %d\n", me->cpu_id);
+
     // config mtcp context
     mctx_t mctx = mtcp_create_context(me->cpu_id);
     fprintf(stdout, "running mctp context on core %d\n", me->cpu_id);
@@ -532,7 +555,7 @@ static void *worker_libevent(void *arg) {
     me->base = event_init();
 #endif
 
-    if (! me->base) {
+    if (!me->base) {
         fprintf(stderr, "Can't allocate event base\n");
         exit(1);
     }

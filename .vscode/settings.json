@@ -11,7 +11,9 @@
         "istream": "c",
         "limits": "c",
         "sstream": "c",
-        "streambuf": "c"
+        "streambuf": "c",
+        "unistd.h": "c",
+        "sched.h": "c"
     },
     "cmake.sourceDirectory": "${workspaceFolder}/third_party/libevent"
 }

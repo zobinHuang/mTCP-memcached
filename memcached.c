@@ -276,7 +276,7 @@ static void settings_init(void) {
     settings.auth_file = NULL;        /* by default, not using ASCII authentication tokens */
     settings.factor = 1.25;
     settings.chunk_size = 48;         /* space for a modest key and value */
-    settings.num_threads = 2;         /* N workers */
+    settings.num_threads = 1;         /* N workers */
     settings.num_threads_per_udp = 0;
     settings.prefix_delimiter = ':';
     settings.detail_enabled = 0;
@@ -3022,6 +3022,7 @@ static int read_into_chunked_item(conn *c) {
 }
 
 static void drive_machine(conn *c) {
+    fprintf(stdout, "enter drive_machine\n");
     bool stop = false;
     int sfd;
     socklen_t addrlen;
@@ -3029,16 +3030,11 @@ static void drive_machine(conn *c) {
     int nreqs = settings.reqs_per_event;
     int res;
     const char *str;
-#ifdef HAVE_ACCEPT4
-    static int  use_accept4 = 1;
-#else
-    static int  use_accept4 = 0;
-#endif
 
     assert(c != NULL);
 
     while (!stop) {
-
+        fprintf(stdout, "enter while loop of the drive_machine, state: %d\n", c->state);
         switch(c->state) {
         case conn_listening:
             fprintf(stdout, "listening port recv connect request!\n");
@@ -3048,6 +3044,9 @@ static void drive_machine(conn *c) {
             if( sfd < 0 ){
                 fprintf(stderr, "Failed to mtcp_accept connection: %s\n", strerror(errno));
             }
+
+            struct mtcp_context *mtcx_pointer = c->mctx;
+            fprintf(stdout, "mtcp accept a connection on core %d\n", c->thread->cpu_id);
 
             bool reject;
             if (settings.maxconns_fast) {
@@ -3884,6 +3883,7 @@ static void old_drive_machine(conn *c) {
 }
 
 void event_handler(const evutil_socket_t fd, const short which, void *arg) {
+    fprintf(stdout, "enter event_handler\n");
     conn *c;
 
     c = (conn *)arg;
@@ -3893,8 +3893,11 @@ void event_handler(const evutil_socket_t fd, const short which, void *arg) {
 
     /* sanity */
     if (fd != c->sfd) {
-        if (settings.verbose > 0)
+        if (settings.verbose > 0){
+            fprintf(stdout, "Catastrophic: event fd doesn't match conn fd!\n");
             fprintf(stderr, "Catastrophic: event fd doesn't match conn fd!\n");
+        }
+            
         conn_close(c);
         return;
     }

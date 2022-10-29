@@ -23,6 +23,10 @@ AllocateSocket(mctx_t mctx, int socktype, int need_lock)
 		}
 
 		TAILQ_REMOVE(&mtcp->free_smap, socket, free_smap_link);
+		TRACE_CONFIG("create socket %d on mtcp_manager_t of core %d\n", 
+			socket->id, 
+			mtcp->ctx->cpu
+		);
 
 		/* if there is not invalidated events, insert the socket to the end */
 		/* and find another socket in the free smap list */

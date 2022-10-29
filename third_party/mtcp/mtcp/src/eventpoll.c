@@ -569,15 +569,19 @@ inline int
 AddEpollEvent(struct mtcp_epoll *ep, 
 		int queue_type, socket_map_t socket, uint32_t event)
 {
+	TRACE_CONFIG("enter AddEpollEvent!\n");
 	struct event_queue *eq;
 	int index;
 
-	if (!ep || !socket || !event)
+	if (!ep || !socket || !event){
+		TRACE_CONFIG("!ep || !socket || !event, something is wrong\n");
 		return -1;
-	
+	}
+		
 	ep->stat.issued++;
 
 	if (socket->events & event) {
+		TRACE_CONFIG("no event of %u for socket %d registered\n", event, socket->id);
 		return 0;
 	}
 
@@ -590,11 +594,14 @@ AddEpollEvent(struct mtcp_epoll *ep,
 		eq = ep->usr_shadow_queue;
 	} else {
 		TRACE_ERROR("Non-existing event queue type!\n");
+		TRACE_CONFIG("Non-existing event queue type!\n");
 		return -1;
 	}
 
 	if (eq->num_events >= eq->size) {
 		TRACE_ERROR("Exceeded epoll event queue! num_events: %d, size: %d\n", 
+				eq->num_events, eq->size);
+		TRACE_CONFIG("Exceeded epoll event queue! num_events: %d, size: %d\n", 
 				eq->num_events, eq->size);
 		if (queue_type == USR_EVENT_QUEUE)
 			pthread_mutex_unlock(&ep->epoll_lock);

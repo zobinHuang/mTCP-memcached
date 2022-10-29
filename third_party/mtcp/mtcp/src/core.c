@@ -791,7 +791,7 @@ RunMainLoop(struct mtcp_thread_context *ctx)
 			for (i = 0; i < recv_cnt; i++) {
 				pktbuf = mtcp->iom->get_rptr(mtcp->ctx, rx_inf, i, &len);
 				if (pktbuf != NULL){
-					TRACE_CONFIG("MTCP Recv Packet with length %u.\n", len);
+					TRACE_CONFIG("MTCP Recv Packet with length %u, process on core %d\n", len, ctx->cpu);
 					ProcessPacket(mtcp, rx_inf, ts, pktbuf, len);
 				}
 					

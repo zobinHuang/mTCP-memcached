@@ -2572,10 +2572,14 @@ static int
 evthread_notify_base(struct event_base *base)
 {
 	EVENT_BASE_ASSERT_LOCKED(base);
-	if (!base->th_notify_fn)
+	if (!base->th_notify_fn){
 		return -1;
-	if (base->is_notify_pending)
+	}
+		
+	if (base->is_notify_pending){
 		return 0;
+	}
+	
 	base->is_notify_pending = 1;
 	return base->th_notify_fn(base);
 }
@@ -2954,6 +2958,9 @@ event_active_nolock_(struct event *ev, int res, short ncalls)
 	event_debug(("event_active: %p (fd "EV_SOCK_FMT"), res %d, callback %p",
 		ev, EV_SOCK_ARG(ev->ev_fd), (int)res, ev->ev_callback));
 
+	// fprintf(stdout, "event_active: %p (fd "EV_SOCK_FMT"), res %d, callback %p",
+	// 	ev, EV_SOCK_ARG(ev->ev_fd), (int)res, ev->ev_callback);
+
 	base = ev->ev_base;
 	EVENT_BASE_ASSERT_LOCKED(base);
 
@@ -3039,6 +3046,8 @@ event_callback_activate_nolock_(struct event_base *base,
 {
 	int r = 1;
 
+	// fprintf(stdout, "enter event_callback_activate_nolock_\n");
+
 	if (evcb->evcb_flags & EVLIST_FINALIZING)
 		return 0;
 
@@ -3058,7 +3067,7 @@ event_callback_activate_nolock_(struct event_base *base,
 
 	event_queue_insert_active(base, evcb);
 
-	if (EVBASE_NEED_NOTIFY(base))
+	if (EVBASE_NEED_NOTIFY(base)){}
 		evthread_notify_base(base);
 
 	return r;

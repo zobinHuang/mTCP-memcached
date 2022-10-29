@@ -433,7 +433,8 @@ evmap_io_active_(struct event_base *base, evutil_socket_t fd, short events)
 		return;
 	LIST_FOREACH(ev, &ctx->events, ev_io_next) {
 		if (ev->ev_events & events)
-			event_active_nolock_(ev, ev->ev_events & events, 1);
+			// event_active_nolock_(ev, ev->ev_events & events, 1);
+			event_active(ev, ev->ev_events & events, 1);
 	}
 }
 
