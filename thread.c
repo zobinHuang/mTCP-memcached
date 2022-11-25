@@ -537,7 +537,7 @@ static void *worker_libevent(void *arg) {
     struct sockaddr_in saddr;
     saddr.sin_family = AF_INET;
 	saddr.sin_addr.s_addr = INADDR_ANY;
-    saddr.sin_port = htons(11103+me->cpu_id);
+    saddr.sin_port = htons(11103);
 	// saddr.sin_port = htons(SOCKET_SERVER_PORT);
 	ret = mtcp_bind(mctx, listen_sock, 
 			(struct sockaddr *)&saddr, sizeof(struct sockaddr_in));
@@ -546,7 +546,7 @@ static void *worker_libevent(void *arg) {
 		mtcp_close(mctx, listen_sock);
         exit(1);
 	}
-    fprintf(stdout, "bind to port %u (htons: %u)\n", 11103+me->cpu_id, htons(11103+me->cpu_id));
+    fprintf(stdout, "bind to port %u (htons: %u)\n", 11103, htons(11103));
 
     // set as listen mode
     ret = mtcp_listen(mctx, listen_sock, 4096);
