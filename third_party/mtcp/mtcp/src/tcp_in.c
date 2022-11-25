@@ -873,6 +873,7 @@ static inline void
 Handle_TCP_ST_SYN_RCVD (mtcp_manager_t mtcp, uint32_t cur_ts,
 		tcp_stream* cur_stream, struct tcphdr* tcph, uint32_t ack_seq) 
 {
+	TRACE_CONFIG("enter Handle_TCP_ST_SYN_RCVD\n");
 	struct tcp_send_vars *sndvar = cur_stream->sndvar;
 	int ret;
 	if (tcph->ack) {
@@ -907,8 +908,12 @@ Handle_TCP_ST_SYN_RCVD (mtcp_manager_t mtcp, uint32_t cur_ts,
 		/* update listening socket */
 		listener = (struct tcp_listener *)ListenerHTSearch(mtcp->listeners, &tcph->dest);
 
+		TRACE_CONFIG("listener address: %p\n", (void*)listener);
+
 		ret = StreamEnqueue(listener->acceptq, cur_stream);
 		if (ret < 0) {
+			TRACE_CONFIG("Stream %d: Failed to enqueue to "
+					"the listen backlog!\n", cur_stream->id);
 			TRACE_ERROR("Stream %d: Failed to enqueue to "
 					"the listen backlog!\n", cur_stream->id);
 			cur_stream->close_reason = TCP_NOT_ACCEPTED;

@@ -883,7 +883,15 @@ struct conn {
 };
 
 /* array of conn structures, indexed by file descriptor */
-extern conn **conns;
+// extern conn **conns;
+typedef struct mtcp_conn_list {
+    mctx_t mctx;
+    conn **conns;
+} mtcp_conn_list;
+
+extern mtcp_conn_list **mtcp_conns;
+
+extern int num_threads;
 
 /* current time of day (updated periodically) */
 extern volatile rel_time_t current_time;
@@ -932,7 +940,7 @@ void conn_io_queue_setup(conn *c);
 io_queue_t *conn_io_queue_get(conn *c, int type);
 io_queue_cb_t *thread_io_queue_get(LIBEVENT_THREAD *t, int type);
 void conn_io_queue_return(io_pending_t *io);
-conn *conn_new(const int sfd, const enum conn_states init_state, const int event_flags, const int read_buffer_size,
+conn *conn_new(const int sfd, const enum conn_states init_state, const int event_flags, const mctx_t mctx, const int read_buffer_size,
     enum network_transport transport, struct event_base *base, void *ssl, uint64_t conntag, enum protocol bproto);
 
 void conn_worker_readd(conn *c);

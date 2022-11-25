@@ -432,10 +432,22 @@ evmap_io_active_(struct event_base *base, evutil_socket_t fd, short events)
 	if (NULL == ctx)
 		return;
 	LIST_FOREACH(ev, &ctx->events, ev_io_next) {
-		if (ev->ev_events & events)
-			// event_active_nolock_(ev, ev->ev_events & events, 1);
-			event_active(ev, ev->ev_events & events, 1);
+		if (ev->ev_events & events){
+			// TRY:
+			// if(base == ev->ev_base) {
+			// 	event_active_nolock_(ev, ev->ev_events & events, 1);
+			// }
+			// else {
+			// 	ev->ev_base = base;
+			// 	event_active_nolock_(ev, ev->ev_events & events, 1);
+			// }
+			event_active_nolock_(ev, ev->ev_events & events, 1);
+			fprintf(stdout, "check base equality, base = %d, event base = %d\n", base, ev->ev_base);
+			fprintf(stdout, "after event_active_nolock_, the active event count is %d\n", base->event_count_active);
+		}
 	}
+
+	fprintf(stdout, "before returning from evmap_io_active_, the active event count is %d\n", base->event_count_active);
 }
 
 /* code specific to signals */

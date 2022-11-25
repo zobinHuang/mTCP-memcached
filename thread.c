@@ -100,7 +100,7 @@ unsigned int item_lock_hashpower;
  * Each libevent instance has a wakeup pipe, which other threads
  * can use to signal that they've put a new connection on its queue.
  */
-static LIBEVENT_THREAD *threads;
+LIBEVENT_THREAD *threads;
 
 /*
  * Number of worker threads that have finished setting themselves up.
@@ -388,7 +388,7 @@ static void create_worker(void *(*func)(void *), void *arg) {
 
     pthread_attr_init(&attr);
 
-    if ((ret = pthread_create(&((LIBEVENT_THREAD*)arg)->thread_id, &attr, func, arg)) != 0) {
+    if ((ret = pthread_create(&((LIBEVENT_THREAD*)arg)->thread_id, NULL, func, arg)) != 0) {
         fprintf(stderr, "Can't create thread: %s\n",
                 strerror(ret));
         exit(1);
@@ -411,12 +411,12 @@ void accept_new_conns(const bool do_accept) {
 static void setup_thread(LIBEVENT_THREAD *me, int cpu_id) {
     me->cpu_id = cpu_id;
 
-    me->ev_queue = malloc(sizeof(struct conn_queue));
-    if (me->ev_queue == NULL) {
-        perror("Failed to allocate memory for connection queue");
-        exit(EXIT_FAILURE);
-    }
-    cq_init(me->ev_queue);
+    // me->ev_queue = malloc(sizeof(struct conn_queue));
+    // if (me->ev_queue == NULL) {
+    //     perror("Failed to allocate memory for connection queue");
+    //     exit(EXIT_FAILURE);
+    // }
+    // cq_init(me->ev_queue);
 
     if (pthread_mutex_init(&me->stats.mutex, NULL) != 0) {
         perror("Failed to initialize mutex");
@@ -425,7 +425,7 @@ static void setup_thread(LIBEVENT_THREAD *me, int cpu_id) {
 
     me->rbuf_cache = cache_create("rbuf", READ_BUFFER_SIZE, sizeof(char *));
     if (me->rbuf_cache == NULL) {
-        fprintf(stderr, "Failed to create read buffer cache\n");
+        fprintf(stdout, "Failed to create read buffer cache\n");
         exit(EXIT_FAILURE);
     }
     // Note: we were cleanly passing in num_threads before, but this now
@@ -442,7 +442,7 @@ static void setup_thread(LIBEVENT_THREAD *me, int cpu_id) {
 
     me->io_cache = cache_create("io", sizeof(io_pending_t), sizeof(char*));
     if (me->io_cache == NULL) {
-        fprintf(stderr, "Failed to create IO object cache\n");
+        fprintf(stdout, "Failed to create IO object cache\n");
         exit(EXIT_FAILURE);
     }
 #ifdef TLS
@@ -496,25 +496,39 @@ static void *worker_libevent(void *arg) {
     int ret;
     conn *listen_conn_add;
     
+    int core_id = me->cpu_id;
+
+    // bind current thread to specified cpu
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    CPU_SET(core_id, &mask);
+    if(-1 == pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask)) {
+        printf("failed to bind thread to cpu %d\n", core_id);
+        exit(-1);
+    }
+
     // if(stick_this_thread_to_core(me->cpu_id) != 0)
     //     fprintf(stdout, "failed to bind the thread to core %d\n", me->cpu_id);
     
-    if(mtcp_core_affinitize(me->cpu_id) != 0)
-        fprintf(stdout, "failed to bind the mtcp thread to core %d\n", me->cpu_id);
+    if(mtcp_core_affinitize(core_id) != 0)
+        fprintf(stdout, "failed to bind the mtcp thread to core %d\n", core_id);
 
     // config mtcp context
-    mctx_t mctx = mtcp_create_context(me->cpu_id);
-    fprintf(stdout, "running mctp context on core %d\n", me->cpu_id);
+    mctx_t mctx = mtcp_create_context(core_id);
+    fprintf(stdout, "running mctp context on core %d\n", core_id);
+
+    // record in global list
+    mtcp_conns[core_id]->mctx = mctx;
 
     // create listen port
     int listen_sock = mtcp_socket(mctx, AF_INET, SOCK_STREAM, 0);
     if(listen_sock < 0){
-        fprintf(stderr, "failed to create mtcp socket for listening, exits\n");
+        fprintf(stdout, "failed to create mtcp socket for listening, exits\n");
         exit(1);
     }
     ret = mtcp_setsock_nonblock(mctx, listen_sock);
     if(ret < 0){
-        fprintf(stderr, "failed to set listen socket as non-blocking mode, exits\n");
+        fprintf(stdout, "failed to set listen socket as non-blocking mode, exits\n");
         mtcp_close(mctx, listen_sock);
         exit(1);
     }
@@ -523,49 +537,44 @@ static void *worker_libevent(void *arg) {
     struct sockaddr_in saddr;
     saddr.sin_family = AF_INET;
 	saddr.sin_addr.s_addr = INADDR_ANY;
-    saddr.sin_port = htons(11103);
+    saddr.sin_port = htons(11103+me->cpu_id);
 	// saddr.sin_port = htons(SOCKET_SERVER_PORT);
 	ret = mtcp_bind(mctx, listen_sock, 
 			(struct sockaddr *)&saddr, sizeof(struct sockaddr_in));
 	if (ret < 0) {
-		fprintf(stderr, "failed to bind to the listening socket, exits\n");
+		fprintf(stdout, "failed to bind to the listening socket, exits\n");
 		mtcp_close(mctx, listen_sock);
         exit(1);
 	}
-    fprintf(stdout, "bind to port %u (htons: %u)", 11103, htons(11103));
+    fprintf(stdout, "bind to port %u (htons: %u)\n", 11103+me->cpu_id, htons(11103+me->cpu_id));
 
     // set as listen mode
     ret = mtcp_listen(mctx, listen_sock, 4096);
     if (ret < 0) {
-		fprintf(stderr, "failed to set mtcp socket as listen mode\n");
+		fprintf(stdout, "failed to set mtcp socket as listen mode\n");
 		mtcp_close(mctx, listen_sock);
         exit(1);
 	}
     fprintf(stdout, "set mtcp socket as listen mode\n");
     
     // setup event base
-#if defined(LIBEVENT_VERSION_NUMBER) && LIBEVENT_VERSION_NUMBER >= 0x02000101
-    struct event_config *ev_config;
-    ev_config = event_config_new();
+    struct event_config *ev_config = event_config_new();
     event_config_set_mctp(ev_config, mctx);
-    event_config_set_flag(ev_config, EVENT_BASE_FLAG_NOLOCK);
+    // event_config_set_flag(ev_config, EVENT_BASE_FLAG_NOLOCK);
     me->base = event_base_new_with_config(ev_config);
-    event_config_free(ev_config);
-#else
-    me->base = event_init();
-#endif
+    // event_config_free(ev_config);
 
     if (!me->base) {
-        fprintf(stderr, "Can't allocate event base\n");
+        fprintf(stdout, "Can't allocate event base\n");
         exit(1);
     }
 
     // create new connection
     // the callback of mtcp_epoll is setup here
     if (!(listen_conn_add = conn_new(listen_sock, conn_listening,
-                                     EV_READ | EV_PERSIST, 0,
-                                     tcp_transport, me->base, NULL, 0, ascii_prot))) {
-        fprintf(stderr, "failed to create listening connection\n");
+                                     EV_READ | EV_PERSIST, mctx,
+                                     0, tcp_transport, me->base, NULL, 0, ascii_prot))) {
+        fprintf(stdout, "failed to create listening connection\n");
         mtcp_close(mctx, listen_sock);
         exit(1);
     }
@@ -585,10 +594,10 @@ static void *worker_libevent(void *arg) {
 // #endif
 //     event_base_set(me->base, &me->notify_event);
 
-    // if (event_add(&me->notify_event, 0) == -1) {
-    //     fprintf(stderr, "Can't monitor libevent notify pipe\n");
-    //     exit(1);
-    // }
+//     if (event_add(&me->notify_event, 0) == -1) {
+//         fprintf(stderr, "Can't monitor libevent notify pipe\n");
+//         exit(1);
+//     }
 
     /* Any per-thread setup can happen here; memcached_thread_init() will block until
      * all threads have finished initializing.
@@ -605,7 +614,10 @@ static void *worker_libevent(void *arg) {
 
     register_thread_initialized();
 
-    event_base_loop(me->base, 0);
+    // event_base_loop(me->base, 0);
+    fprintf(stdout, "thread %d enter libevent loop!\n", me->cpu_id);
+    event_base_dispatch(me->base);
+    fprintf(stdout, "thread %d quit loop!\n", me->cpu_id);
 
     // same mechanism used to watch for all threads exiting.
     register_thread_initialized();
@@ -625,100 +637,114 @@ static void *worker_libevent(void *arg) {
 // Syscalls can be expensive enough that handling a few of them once here can
 // save both throughput and overall latency.
 #define MAX_PIPE_EVENTS 32
-static void thread_libevent_process(evutil_socket_t fd, short which, void *arg) {
-    LIBEVENT_THREAD *me = arg;
-    CQ_ITEM *item;
-    conn *c;
-    uint64_t ev_count = 0; // max number of events to loop through this run.
-#ifdef HAVE_EVENTFD
-    // NOTE: unlike pipe we aren't limiting the number of events per read.
-    // However we do limit the number of queue pulls to what the count was at
-    // the time of this function firing.
-    if (read(fd, &ev_count, sizeof(uint64_t)) != sizeof(uint64_t)) {
-        if (settings.verbose > 0)
-            fprintf(stderr, "Can't read from libevent pipe\n");
-        return;
-    }
-#else
-    char buf[MAX_PIPE_EVENTS];
+// static void thread_libevent_process(evutil_socket_t fd, short which, void *arg) {
+//     LIBEVENT_THREAD *me = arg;
+//     CQ_ITEM *item;
+//     conn *c;
+//     uint64_t ev_count = 0; // max number of events to loop through this run.
+// #ifdef HAVE_EVENTFD
+//     // NOTE: unlike pipe we aren't limiting the number of events per read.
+//     // However we do limit the number of queue pulls to what the count was at
+//     // the time of this function firing.
+//     if (read(fd, &ev_count, sizeof(uint64_t)) != sizeof(uint64_t)) {
+//         if (settings.verbose > 0)
+//             fprintf(stderr, "Can't read from libevent pipe\n");
+//         return;
+//     }
+// #else
+//     char buf[MAX_PIPE_EVENTS];
 
-    ev_count = read(fd, buf, MAX_PIPE_EVENTS);
-    if (ev_count == 0) {
-        if (settings.verbose > 0)
-            fprintf(stderr, "Can't read from libevent pipe\n");
-        return;
-    }
-#endif
+//     ev_count = read(fd, buf, MAX_PIPE_EVENTS);
+//     if (ev_count == 0) {
+//         if (settings.verbose > 0)
+//             fprintf(stderr, "Can't read from libevent pipe\n");
+//         return;
+//     }
+// #endif
 
-    for (int x = 0; x < ev_count; x++) {
-        item = cq_pop(me->ev_queue);
-        if (item == NULL) {
-            return;
-        }
+//     for (int x = 0; x < ev_count; x++) {
+//         item = cq_pop(me->ev_queue);
+//         if (item == NULL) {
+//             return;
+//         }
 
-        switch (item->mode) {
-            case queue_new_conn:
-                c = conn_new(item->sfd, item->init_state, item->event_flags,
-                                   item->read_buffer_size, item->transport,
-                                   me->base, item->ssl, item->conntag, item->bproto);
-                if (c == NULL) {
-                    if (IS_UDP(item->transport)) {
-                        fprintf(stderr, "Can't listen for events on UDP socket\n");
-                        exit(1);
-                    } else {
-                        if (settings.verbose > 0) {
-                            fprintf(stderr, "Can't listen for events on fd %d\n",
-                                item->sfd);
-                        }
-#ifdef TLS
-                        if (item->ssl) {
-                            SSL_shutdown(item->ssl);
-                            SSL_free(item->ssl);
-                        }
-#endif
-                        close(item->sfd);
-                    }
-                } else {
-                    c->thread = me;
-                    conn_io_queue_setup(c);
-#ifdef TLS
-                    if (settings.ssl_enabled && c->ssl != NULL) {
-                        assert(c->thread && c->thread->ssl_wbuf);
-                        c->ssl_wbuf = c->thread->ssl_wbuf;
-                    }
-#endif
-                }
-                break;
-            case queue_pause:
-                /* we were told to pause and report in */
-                register_thread_initialized();
-                break;
-            case queue_timeout:
-                /* a client socket timed out */
-                conn_close_idle(conns[item->sfd]);
-                break;
-            case queue_redispatch:
-                /* a side thread redispatched a client connection */
-                conn_worker_readd(conns[item->sfd]);
-                break;
-            case queue_stop:
-                /* asked to stop */
-                event_base_loopexit(me->base, NULL);
-                break;
-            case queue_return_io:
-                /* getting an individual IO object back */
-                conn_io_queue_return(item->io);
-                break;
-#ifdef PROXY
-            case queue_proxy_reload:
-                proxy_worker_reload(settings.proxy_ctx, me);
-                break;
-#endif
-        }
+//         switch (item->mode) {
+//             case queue_new_conn:
+//                 c = conn_new(item->sfd, item->init_state, item->event_flags,
+//                                    item->read_buffer_size, item->transport,
+//                                    me->base, item->ssl, item->conntag, item->bproto);
+//                 if (c == NULL) {
+//                     if (IS_UDP(item->transport)) {
+//                         fprintf(stderr, "Can't listen for events on UDP socket\n");
+//                         exit(1);
+//                     } else {
+//                         if (settings.verbose > 0) {
+//                             fprintf(stderr, "Can't listen for events on fd %d\n",
+//                                 item->sfd);
+//                         }
+// #ifdef TLS
+//                         if (item->ssl) {
+//                             SSL_shutdown(item->ssl);
+//                             SSL_free(item->ssl);
+//                         }
+// #endif
+//                         close(item->sfd);
+//                     }
+//                 } else {
+//                     c->thread = me;
+//                     conn_io_queue_setup(c);
+// #ifdef TLS
+//                     if (settings.ssl_enabled && c->ssl != NULL) {
+//                         assert(c->thread && c->thread->ssl_wbuf);
+//                         c->ssl_wbuf = c->thread->ssl_wbuf;
+//                     }
+// #endif
+//                 }
+//                 break;
+//             case queue_pause:
+//                 /* we were told to pause and report in */
+//                 register_thread_initialized();
+//                 break;
+//             case queue_timeout:
+//                 /* a client socket timed out */
+//                 mctx_t mctx = me->mctx;
+//                 for(int j=0; j<num_threads; j++){
+//                     if(mtcp_conns[j]->mctx == mctx){
+//                         conn **conns = mtcp_conns[j]->conns;
+//                         conn_close_idle(conns[item->sfd]);
+//                         break;
+//                     }
+//                 }
+//                 break;
+//             case queue_redispatch:
+//                 /* a side thread redispatched a client connection */
+//                 mctx_t mctx = me->mctx;
+//                 for(int j=0; j<num_threads; j++){
+//                     if(mtcp_conns[j]->mctx == mctx){
+//                         conn **conns = mtcp_conns[j]->conns;
+//                         conn_worker_readd(conns[item->sfd]);
+//                         break;
+//                     }
+//                 }
+//                 break;
+//             case queue_stop:
+//                 /* asked to stop */
+//                 event_base_loopexit(me->base, NULL);
+//                 break;
+//             case queue_return_io:
+//                 /* getting an individual IO object back */
+//                 conn_io_queue_return(item->io);
+//                 break;
+// #ifdef PROXY
+//             case queue_proxy_reload:
+//                 proxy_worker_reload(settings.proxy_ctx, me);
+//                 break;
+// #endif
+//         }
 
-        cqi_free(me->ev_queue, item);
-    }
-}
+//         cqi_free(me->ev_queue, item);
+//     }
+// }
 
 // NOTE: need better encapsulation.
 // used by the proxy module to iterate the worker threads.

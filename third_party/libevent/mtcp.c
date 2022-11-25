@@ -417,6 +417,7 @@ mtcp_epoll_dispatch(struct event_base *base, struct timeval *tv){
 
 		fprintf(stdout, "try to activate events on this base \n");
 		evmap_io_active_(base, events[i].data.sockid, ev | EV_ET);
+		fprintf(stdout, "after evmap_io_active_, the active event count is %d\n", base->event_count_active);
     }
 
     if (res == mtcp_epollop->nevents && mtcp_epollop->nevents < MAX_NEVENT) {
@@ -432,6 +433,8 @@ mtcp_epoll_dispatch(struct event_base *base, struct timeval *tv){
 			mtcp_epollop->nevents = new_nevents;
 		}
 	}
+
+	fprintf(stdout, "before returning mtcp_epoll_dispatch, the active event count is %d\n", base->event_count_active);
 
 	return (0);
 }

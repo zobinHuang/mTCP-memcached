@@ -362,7 +362,7 @@ ev_int32_t evutil_weakrand_range_(struct evutil_weakrand_state *seed, ev_int32_t
 			    __FILE__,__LINE__,#cond,__func__);		\
 			/* In case a user-supplied handler tries to */	\
 			/* return control to us, log and abort here. */	\
-			(void)fprintf(stderr,				\
+			(void)fprintf(stdout,				\
 			    "%s:%d: Assertion %s failed in %s",		\
 			    __FILE__,__LINE__,#cond,__func__);		\
 			abort();					\

@@ -2020,6 +2020,7 @@ event_base_loop(struct event_base *base, int flags)
 		clear_time_cache(base);
 
 		res = evsel->dispatch(base, tv_p);
+		fprintf(stdout, "return from dispatch\n");
 
 		if (res == -1) {
 			event_debug(("%s: dispatch returned unsuccessfully.",
@@ -2029,11 +2030,16 @@ event_base_loop(struct event_base *base, int flags)
 		}
 
 		update_time_cache(base);
+		fprintf(stdout, "update_time_cache\n");
 
 		timeout_process(base);
+		fprintf(stdout, "timeout_process\n");
 
 		if (N_ACTIVE_CALLBACKS(base)) {
+			fprintf(stdout, "exist active callbacks\n");
 			int n = event_process_active(base);
+			fprintf(stdout, "processed %d active callbacks\n", n);
+
 			if ((flags & EVLOOP_ONCE)
 			    && N_ACTIVE_CALLBACKS(base) == 0
 			    && n != 0)
@@ -2537,6 +2543,7 @@ event_add(struct event *ev, const struct timeval *tv)
 static int
 evthread_notify_base_default(struct event_base *base)
 {
+	fprintf(stdout, "enter evthread_notify_base_default\n");
 	char buf[1];
 	int r;
 	buf[0] = (char) 0;
@@ -2570,7 +2577,8 @@ evthread_notify_base_eventfd(struct event_base *base)
  * active callbacks. */
 static int
 evthread_notify_base(struct event_base *base)
-{
+{	
+	fprintf(stdout, "enter evthread_notify_base\n");
 	EVENT_BASE_ASSERT_LOCKED(base);
 	if (!base->th_notify_fn){
 		return -1;
@@ -2581,7 +2589,8 @@ evthread_notify_base(struct event_base *base)
 	}
 	
 	base->is_notify_pending = 1;
-	return base->th_notify_fn(base);
+
+	return base->th_notify_fn(base); 
 }
 
 /* Implementation function to remove a timeout on a currently pending event.
@@ -3002,6 +3011,7 @@ event_active_nolock_(struct event *ev, int res, short ncalls)
 	}
 
 	event_callback_activate_nolock_(base, event_to_event_callback(ev));
+	fprintf(stdout, "after event_callback_activate_nolock_, the active event count is %d\n", base->event_count_active);
 }
 
 void
@@ -3046,7 +3056,7 @@ event_callback_activate_nolock_(struct event_base *base,
 {
 	int r = 1;
 
-	// fprintf(stdout, "enter event_callback_activate_nolock_\n");
+	fprintf(stdout, "enter event_callback_activate_nolock_\n");
 
 	if (evcb->evcb_flags & EVLIST_FINALIZING)
 		return 0;
@@ -3065,11 +3075,13 @@ event_callback_activate_nolock_(struct event_base *base,
 		break;
 	}
 
+	fprintf(stdout, "try to event_queue_insert_active\n");
 	event_queue_insert_active(base, evcb);
 
-	if (EVBASE_NEED_NOTIFY(base)){}
+	if (EVBASE_NEED_NOTIFY(base))
 		evthread_notify_base(base);
 
+	fprintf(stdout, "before quiting event_callback_activate_nolock_, the active event count is %d\n", base->event_count_active);
 	return r;
 }
 
@@ -3415,23 +3427,38 @@ event_queue_insert_inserted(struct event_base *base, struct event *ev)
 
 static void
 event_queue_insert_active(struct event_base *base, struct event_callback *evcb)
-{
+{	
+	fprintf(stdout, "enter event_queue_insert_active\n");
 	EVENT_BASE_ASSERT_LOCKED(base);
 
 	if (evcb->evcb_flags & EVLIST_ACTIVE) {
 		/* Double insertion is possible for active events */
+		fprintf(stdout, "double insertion detected!\n");
 		return;
 	}
 
+	fprintf(stdout, "increase event flag count\n");
 	INCR_EVENT_COUNT(base, evcb->evcb_flags);
 
+	fprintf(stdout, "mark event callback as activate\n");
 	evcb->evcb_flags |= EVLIST_ACTIVE;
 
+	fprintf(stdout, "active event count， before increasing is %d\n", base->event_count_active);
 	base->event_count_active++;
+	fprintf(stdout, "active event count， after increasing is %d\n", base->event_count_active);
+
+	fprintf(stdout, "max event count\n");
 	MAX_EVENT_COUNT(base->event_count_active_max, base->event_count_active);
+	fprintf(stdout, "active event count is %d\n", base->event_count_active);
+	
+	fprintf(stdout, "check prority\n");
 	EVUTIL_ASSERT(evcb->evcb_pri < base->nactivequeues);
+	fprintf(stdout, "active event count is %d\n", base->event_count_active);
+
+	fprintf(stdout, "enqueue!\n");
 	TAILQ_INSERT_TAIL(&base->activequeues[evcb->evcb_pri],
 	    evcb, evcb_active_next);
+	fprintf(stdout, "active event count is %d\n", base->event_count_active);
 }
 
 static void

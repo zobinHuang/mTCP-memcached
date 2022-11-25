@@ -77,6 +77,11 @@ static ssize_t f_mtcp_read(conn *c, void *buf, size_t count);
 static ssize_t f_mtcp_sendmsg(conn *c, struct msghdr *msg, int flags);
 static ssize_t f_mtcp_write(conn *c, void *buf, size_t count);
 
+/*
+ * Each libevent instance has a wakeup pipe, which other threads
+ * can use to signal that they've put a new connection on its queue.
+ */
+extern LIBEVENT_THREAD *threads;
 
 enum try_read_result {
     READ_DATA_RECEIVED,
@@ -114,7 +119,10 @@ struct stats stats;
 struct stats_state stats_state;
 struct settings settings;
 time_t process_started;     /* when the process was started */
-conn **conns;
+int num_threads;
+
+// conn **conns;
+mtcp_conn_list **mtcp_conns;
 
 struct slab_rebalance slab_rebal;
 volatile int slab_rebalance_signal;
@@ -171,6 +179,17 @@ ssize_t f_mtcp_write(conn *c, void *buf, size_t count) {
     mctx_t mctx = get_mctx_from_event_base(c->event.ev_base);
     fprintf(stdout, "mtcp write: %s\n", buf);
     return mtcp_write(mctx, c->sfd, buf, count);
+}
+
+void signal_handler(int signum)
+{
+	for (int i = 0; i < settings.num_threads; i++) {        
+        if (threads+i == pthread_self()) {
+			//TRACE_INFO("Server thread %d got SIGINT\n", i);
+		} else {
+			pthread_kill(threads+i, signum);
+		}
+	}
 }
 
 static enum transmit_result transmit(conn *c);
@@ -247,7 +266,7 @@ void stats_reset(void) {
 static void settings_init(void) {
     settings.use_cas = true;
     settings.access = 0700;
-    settings.port = 11211;
+    settings.port = 11103;
     settings.udpport = 0;
 #ifdef TLS
     settings.ssl_enabled = false;
@@ -276,7 +295,7 @@ static void settings_init(void) {
     settings.auth_file = NULL;        /* by default, not using ASCII authentication tokens */
     settings.factor = 1.25;
     settings.chunk_size = 48;         /* space for a modest key and value */
-    settings.num_threads = 1;         /* N workers */
+    settings.num_threads = 4;         /* N workers */
     settings.num_threads_per_udp = 0;
     settings.prefix_delimiter = ':';
     settings.detail_enabled = 0;
@@ -335,7 +354,7 @@ static pthread_mutex_t conn_timeout_lock = PTHREAD_MUTEX_INITIALIZER;
 
 #define CONNS_PER_SLICE 100
 static void *conn_timeout_thread(void *arg) {
-    int i;
+    int i, j;
     conn *c;
     rel_time_t oldest_last_cmd;
     int sleep_time;
@@ -352,7 +371,7 @@ static void *conn_timeout_thread(void *arg) {
 
         oldest_last_cmd = current_time;
 
-        for (i = 0; i < max_fds; i++) {
+        for (i = 0; i < settings.num_threads; i++) {
             if ((i % CONNS_PER_SLICE) == 0) {
                 if (settings.verbose > 2)
                     fprintf(stderr, "idle timeout thread sleeping for %ulus\n",
@@ -360,22 +379,24 @@ static void *conn_timeout_thread(void *arg) {
                 usleep(timeslice);
             }
 
-            if (!conns[i])
-                continue;
+            for(j = 0; j < max_fds; j++){
+                if (!mtcp_conns[i]->conns[j])
+                    continue;
 
-            c = conns[i];
+                c = mtcp_conns[i]->conns[j];
 
-            if (!IS_TCP(c->transport))
-                continue;
+                if (!IS_TCP(c->transport))
+                    continue;
 
-            if (c->state != conn_new_cmd && c->state != conn_read)
-                continue;
+                if (c->state != conn_new_cmd && c->state != conn_read)
+                    continue;
 
-            if ((current_time - c->last_cmd_time) > settings.idle_timeout) {
-                timeout_conn(c);
-            } else {
-                if (c->last_cmd_time < oldest_last_cmd)
-                    oldest_last_cmd = c->last_cmd_time;
+                if ((current_time - c->last_cmd_time) > settings.idle_timeout) {
+                    timeout_conn(c);
+                } else {
+                    if (c->last_cmd_time < oldest_last_cmd)
+                        oldest_last_cmd = c->last_cmd_time;
+                }
             }
         }
 
@@ -401,6 +422,74 @@ static void *conn_timeout_thread(void *arg) {
     mutex_unlock(&conn_timeout_lock);
     return NULL;
 }
+
+// static void *old_conn_timeout_thread(void *arg) {
+//     int i;
+//     conn *c;
+//     rel_time_t oldest_last_cmd;
+//     int sleep_time;
+//     int sleep_slice = max_fds / CONNS_PER_SLICE;
+//     if (sleep_slice == 0)
+//         sleep_slice = CONNS_PER_SLICE;
+
+//     useconds_t timeslice = 1000000 / sleep_slice;
+
+//     mutex_lock(&conn_timeout_lock);
+//     while(do_run_conn_timeout_thread) {
+//         if (settings.verbose > 2)
+//             fprintf(stderr, "idle timeout thread at top of connection list\n");
+
+//         oldest_last_cmd = current_time;
+
+//         for (i = 0; i < max_fds; i++) {
+//             if ((i % CONNS_PER_SLICE) == 0) {
+//                 if (settings.verbose > 2)
+//                     fprintf(stderr, "idle timeout thread sleeping for %ulus\n",
+//                         (unsigned int)timeslice);
+//                 usleep(timeslice);
+//             }
+
+//             if (!conns[i])
+//                 continue;
+
+//             c = conns[i];
+
+//             if (!IS_TCP(c->transport))
+//                 continue;
+
+//             if (c->state != conn_new_cmd && c->state != conn_read)
+//                 continue;
+
+//             if ((current_time - c->last_cmd_time) > settings.idle_timeout) {
+//                 timeout_conn(c);
+//             } else {
+//                 if (c->last_cmd_time < oldest_last_cmd)
+//                     oldest_last_cmd = c->last_cmd_time;
+//             }
+//         }
+
+//         /* This is the soonest we could have another connection time out */
+//         sleep_time = settings.idle_timeout - (current_time - oldest_last_cmd) + 1;
+//         if (sleep_time <= 0)
+//             sleep_time = 1;
+
+//         if (settings.verbose > 2)
+//             fprintf(stderr,
+//                     "idle timeout thread finished pass, sleeping for %ds\n",
+//                     sleep_time);
+
+//         struct timeval now;
+//         struct timespec to_sleep;
+//         gettimeofday(&now, NULL);
+//         to_sleep.tv_sec = now.tv_sec + sleep_time;
+//         to_sleep.tv_nsec = 0;
+
+//         pthread_cond_timedwait(&conn_timeout_cond, &conn_timeout_lock, &to_sleep);
+//     }
+
+//     mutex_unlock(&conn_timeout_lock);
+//     return NULL;
+// }
 
 static int start_conn_timeout_thread() {
     int ret;
@@ -516,10 +605,30 @@ static void conn_init(void) {
 
     close(next_fd);
 
-    if ((conns = calloc(max_fds, sizeof(conn *))) == NULL) {
-        fprintf(stderr, "Failed to allocate connection structures\n");
+    fprintf(stdout, "try allocate %d mtcp_conns\n", settings.num_threads);
+    if((mtcp_conns = calloc(settings.num_threads, sizeof(mtcp_conn_list*))) == NULL){
+        fprintf(stdout, "Failed to allocate mtcp_conns structures\n");
         /* This is unrecoverable so bail out early. */
         exit(1);
+    }
+
+    for(int i=0; i<settings.num_threads; i++){
+        mtcp_conn_list* list = (mtcp_conn_list*)malloc(sizeof(mtcp_conn_list));
+        if(!list){
+            fprintf(stdout, "Failed to allocate mtcp_conn_list\n");
+            /* This is unrecoverable so bail out early. */
+            exit(1);
+        }
+        mtcp_conns[i] = list;
+    }
+
+    fprintf(stdout, "try allocate %d conns inside mtcp_conns\n", max_fds);
+    for(int i=0; i<settings.num_threads; i++){
+        if ((mtcp_conns[i]->conns = calloc(max_fds, sizeof(conn *))) == NULL) {
+            fprintf(stdout, "Failed to allocate connection structures\n");
+            /* This is unrecoverable so bail out early. */
+            exit(1);
+        }
     }
 }
 
@@ -680,16 +789,28 @@ void conn_io_queue_return(io_pending_t *io) {
 
 conn *conn_new(const int sfd, enum conn_states init_state,
                 const int event_flags,
+                const mctx_t mctx, 
                 const int read_buffer_size, enum network_transport transport,
                 struct event_base *base, void *ssl, uint64_t conntag,
                 enum protocol bproto) {
     conn *c;
 
-    fprintf(stdout, "try to create new conn instance on thread core\n");
+    fprintf(stdout, "try to create new conn instance\n");
 
     assert(sfd >= 0 && sfd < max_fds);
-    c = conns[sfd];
 
+    conn **conns;
+    for(int i=0; i<settings.num_threads; i++){
+        if(mtcp_conns[i]->mctx == mctx){
+            conns = mtcp_conns[i]->conns;
+        }
+    }
+    if(conns == NULL){
+        fprintf(stdout, "failed to find connection list\n");
+        exit(-1);
+    }
+
+    c = conns[sfd];
     if (NULL == c) {
         if (!(c = (conn *)calloc(1, sizeof(conn)))) {
             STATS_LOCK();
@@ -856,15 +977,21 @@ conn *conn_new(const int sfd, enum conn_states init_state,
 #endif
         }
     }
-
-    event_set(&c->event, sfd, event_flags, event_handler, (void *)c);
-    event_base_set(base, &c->event);
+    
+    // create listen event
+    struct event *mtcp_listen_event = event_new(base, sfd, event_flags, event_handler, (void *)c);
+    event_add(mtcp_listen_event, NULL);
+    // event_set(&c->event, sfd, event_flags, event_handler, (void *)c);
+    // event_base_set(base, &c->event);
     c->ev_flags = event_flags;
 
-    if (event_add(&c->event, 0) == -1) {
+    if (event_add(mtcp_listen_event, 0) == -1) {
+        fprintf(stdout, "failed event_add\n");
         perror("event_add");
         return NULL;
     }
+
+    c->event = *mtcp_listen_event;
 
     STATS_LOCK();
     stats_state.curr_conns++;
@@ -941,15 +1068,21 @@ void conn_free(conn *c) {
         assert(c->sfd >= 0 && c->sfd < max_fds);
 
         MEMCACHED_CONN_DESTROY(c);
-        conns[c->sfd] = NULL;
-        if (c->rbuf)
-            free(c->rbuf);
-#ifdef TLS
-        if (c->ssl_wbuf)
-            c->ssl_wbuf = NULL;
-#endif
 
-        free(c);
+        for(int i=0; i<settings.num_threads; i++){
+            conn **conns = mtcp_conns[i]->conns;
+            mctx_t mctx = mtcp_conns[i]->mctx;
+            if(mctx == c->mctx){
+                conns[c->sfd] = NULL;
+                if (c->rbuf)
+                    free(c->rbuf);
+#ifdef TLS
+                if (c->ssl_wbuf)
+                    c->ssl_wbuf = NULL;
+#endif
+                free(c);
+            }
+        }        
     }
 }
 
@@ -1001,10 +1134,14 @@ static void conn_close(conn *c) {
 // listeners we need to walk through them all from a central point.
 // Must be called with all worker threads hung or in the process of closing.
 void conn_close_all(void) {
-    int i;
-    for (i = 0; i < max_fds; i++) {
-        if (conns[i] && conns[i]->state != conn_closed) {
-            conn_close(conns[i]);
+    int i, j;
+
+    for(j = 0; j < settings.num_threads; j++){
+        conn **conns = mtcp_conns[j]->conns;
+        for (i = 0; i < max_fds; i++) {
+            if (conns[i] && conns[i]->state != conn_closed) {
+                conn_close(conns[i]);
+            }
         }
     }
 }
@@ -2185,7 +2322,7 @@ static void conn_to_str(const conn *c, char *addr, char *svr_addr) {
 }
 
 void process_stats_conns(ADD_STAT add_stats, void *c) {
-    int i;
+    int i, j;
     char key_str[STAT_KEY_LEN];
     char val_str[STAT_VAL_LEN];
     size_t extras_len = sizeof(":unix:") + sizeof("65535");
@@ -2197,28 +2334,31 @@ void process_stats_conns(ADD_STAT add_stats, void *c) {
 
     assert(add_stats);
 
-    for (i = 0; i < max_fds; i++) {
-        if (conns[i]) {
-            /* This is safe to do unlocked because conns are never freed; the
-             * worst that'll happen will be a minor inconsistency in the
-             * output -- not worth the complexity of the locking that'd be
-             * required to prevent it.
-             */
-            if (IS_UDP(conns[i]->transport)) {
-                APPEND_NUM_STAT(i, "UDP", "%s", "UDP");
-            }
-            if (conns[i]->state != conn_closed) {
-                conn_to_str(conns[i], addr, svr_addr);
-
-                APPEND_NUM_STAT(i, "addr", "%s", addr);
-                if (conns[i]->state != conn_listening &&
-                    !(IS_UDP(conns[i]->transport) && conns[i]->state == conn_read)) {
-                    APPEND_NUM_STAT(i, "listen_addr", "%s", svr_addr);
+    for (j = 0; j < settings.num_threads; j++){
+        conn **conns = mtcp_conns[j]->conns;
+        for (i = 0; i < max_fds; i++) {
+            if (conns[i]) {
+                /* This is safe to do unlocked because conns are never freed; the
+                * worst that'll happen will be a minor inconsistency in the
+                * output -- not worth the complexity of the locking that'd be
+                * required to prevent it.
+                */
+                if (IS_UDP(conns[i]->transport)) {
+                    APPEND_NUM_STAT(i, "UDP", "%s", "UDP");
                 }
-                APPEND_NUM_STAT(i, "state", "%s",
-                        state_text(conns[i]->state));
-                APPEND_NUM_STAT(i, "secs_since_last_cmd", "%d",
-                        current_time - conns[i]->last_cmd_time);
+                if (conns[i]->state != conn_closed) {
+                    conn_to_str(conns[i], addr, svr_addr);
+
+                    APPEND_NUM_STAT(i, "addr", "%s", addr);
+                    if (conns[i]->state != conn_listening &&
+                        !(IS_UDP(conns[i]->transport) && conns[i]->state == conn_read)) {
+                        APPEND_NUM_STAT(i, "listen_addr", "%s", svr_addr);
+                    }
+                    APPEND_NUM_STAT(i, "state", "%s",
+                            state_text(conns[i]->state));
+                    APPEND_NUM_STAT(i, "secs_since_last_cmd", "%d",
+                            current_time - conns[i]->last_cmd_time);
+                }
             }
         }
     }
@@ -3039,10 +3179,10 @@ static void drive_machine(conn *c) {
         case conn_listening:
             fprintf(stdout, "listening port recv connect request!\n");
             
-            // only the main thread could accept, so we directly use global mctx here
             int sfd = mtcp_accept(c->mctx, c->sfd, NULL, NULL);
+            fprintf(stdout, "mtcp_accept return %d\n", sfd);
             if( sfd < 0 ){
-                fprintf(stderr, "Failed to mtcp_accept connection: %s\n", strerror(errno));
+                fprintf(stdout, "Failed to mtcp_accept connection: %s\n", strerror(errno));
             }
 
             struct mtcp_context *mtcx_pointer = c->mctx;
@@ -3113,14 +3253,13 @@ static void drive_machine(conn *c) {
 
                 // create new connection instance, conntinue to use current event base
                 conn* new_c = conn_new(sfd, conn_new_cmd, EV_READ | EV_PERSIST,
-                                   READ_BUFFER_CACHED, c->transport,
+                                   c->mctx, READ_BUFFER_CACHED, c->transport,
                                    c->event.ev_base, ssl_v, c->tag, c->protocol);
                 
                 new_c->mctx = c->mctx;
                 new_c->thread = c->thread;
                 conn_io_queue_setup(new_c);
                 drive_machine(new_c);
-                fprintf(stdout, "finish acceptance process, connection state: %d\n", c->state);
             }
 
             fprintf(stdout, "accept connection!\n");
@@ -3983,184 +4122,184 @@ static int server_socket(const char *interface,
     return 0;
 }
 
-static int server_socket_old(const char *interface,
-                         int port,
-                         enum network_transport transport,
-                         FILE *portnumber_file, bool ssl_enabled,
-                         uint64_t conntag,
-                         enum protocol bproto) {
-    int sfd;
-    struct linger ling = {0, 0};
-    struct addrinfo *ai;
-    struct addrinfo *next;
-    struct addrinfo hints = { .ai_flags = AI_PASSIVE,
-                              .ai_family = AF_UNSPEC };
-    char port_buf[NI_MAXSERV];
-    int error;
-    int success = 0;
-    int flags =1;
+// static int server_socket_old(const char *interface,
+//                          int port,
+//                          enum network_transport transport,
+//                          FILE *portnumber_file, bool ssl_enabled,
+//                          uint64_t conntag,
+//                          enum protocol bproto) {
+//     int sfd;
+//     struct linger ling = {0, 0};
+//     struct addrinfo *ai;
+//     struct addrinfo *next;
+//     struct addrinfo hints = { .ai_flags = AI_PASSIVE,
+//                               .ai_family = AF_UNSPEC };
+//     char port_buf[NI_MAXSERV];
+//     int error;
+//     int success = 0;
+//     int flags =1;
 
-    hints.ai_socktype = IS_UDP(transport) ? SOCK_DGRAM : SOCK_STREAM;
+//     hints.ai_socktype = IS_UDP(transport) ? SOCK_DGRAM : SOCK_STREAM;
 
-    if (port == -1) {
-        port = 0;
-    }
-    snprintf(port_buf, sizeof(port_buf), "%d", port);
-    error= getaddrinfo(interface, port_buf, &hints, &ai);
-    if (error != 0) {
-        if (error != EAI_SYSTEM)
-          fprintf(stderr, "getaddrinfo(): %s\n", gai_strerror(error));
-        else
-          perror("getaddrinfo()");
-        return 1;
-    }
+//     if (port == -1) {
+//         port = 0;
+//     }
+//     snprintf(port_buf, sizeof(port_buf), "%d", port);
+//     error= getaddrinfo(interface, port_buf, &hints, &ai);
+//     if (error != 0) {
+//         if (error != EAI_SYSTEM)
+//           fprintf(stderr, "getaddrinfo(): %s\n", gai_strerror(error));
+//         else
+//           perror("getaddrinfo()");
+//         return 1;
+//     }
 
-    for (next= ai; next; next= next->ai_next) {
-        conn *listen_conn_add;
-        if ((sfd = new_socket(next)) == -1) {
-            /* getaddrinfo can return "junk" addresses,
-             * we make sure at least one works before erroring.
-             */
-            if (errno == EMFILE) {
-                /* ...unless we're out of fds */
-                perror("server_socket");
-                exit(EX_OSERR);
-            }
-            continue;
-        }
+//     for (next= ai; next; next= next->ai_next) {
+//         conn *listen_conn_add;
+//         if ((sfd = new_socket(next)) == -1) {
+//             /* getaddrinfo can return "junk" addresses,
+//              * we make sure at least one works before erroring.
+//              */
+//             if (errno == EMFILE) {
+//                 /* ...unless we're out of fds */
+//                 perror("server_socket");
+//                 exit(EX_OSERR);
+//             }
+//             continue;
+//         }
 
-        if (settings.num_napi_ids) {
-            socklen_t len = sizeof(socklen_t);
-            int napi_id;
-            error = getsockopt(sfd, SOL_SOCKET, SO_INCOMING_NAPI_ID, &napi_id, &len);
-            if (error != 0) {
-                fprintf(stderr, "-N <num_napi_ids> option not supported\n");
-                exit(EXIT_FAILURE);
-            }
-        }
+//         if (settings.num_napi_ids) {
+//             socklen_t len = sizeof(socklen_t);
+//             int napi_id;
+//             error = getsockopt(sfd, SOL_SOCKET, SO_INCOMING_NAPI_ID, &napi_id, &len);
+//             if (error != 0) {
+//                 fprintf(stderr, "-N <num_napi_ids> option not supported\n");
+//                 exit(EXIT_FAILURE);
+//             }
+//         }
 
-#ifdef IPV6_V6ONLY
-        if (next->ai_family == AF_INET6) {
-            error = setsockopt(sfd, IPPROTO_IPV6, IPV6_V6ONLY, (char *) &flags, sizeof(flags));
-            if (error != 0) {
-                perror("setsockopt");
-                close(sfd);
-                continue;
-            }
-        }
-#endif
-#ifdef SOCK_COOKIE_ID
-        if (settings.sock_cookie_id != 0) {
-            error = setsockopt(sfd, SOL_SOCKET, SOCK_COOKIE_ID, (void *)&settings.sock_cookie_id, sizeof(uint32_t));
-            if (error != 0)
-                perror("setsockopt");
-        }
-#endif
+// #ifdef IPV6_V6ONLY
+//         if (next->ai_family == AF_INET6) {
+//             error = setsockopt(sfd, IPPROTO_IPV6, IPV6_V6ONLY, (char *) &flags, sizeof(flags));
+//             if (error != 0) {
+//                 perror("setsockopt");
+//                 close(sfd);
+//                 continue;
+//             }
+//         }
+// #endif
+// #ifdef SOCK_COOKIE_ID
+//         if (settings.sock_cookie_id != 0) {
+//             error = setsockopt(sfd, SOL_SOCKET, SOCK_COOKIE_ID, (void *)&settings.sock_cookie_id, sizeof(uint32_t));
+//             if (error != 0)
+//                 perror("setsockopt");
+//         }
+// #endif
 
-        setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, (void *)&flags, sizeof(flags));
-        if (IS_UDP(transport)) {
-            maximize_sndbuf(sfd);
-        } else {
-            error = setsockopt(sfd, SOL_SOCKET, SO_KEEPALIVE, (void *)&flags, sizeof(flags));
-            if (error != 0)
-                perror("setsockopt");
+//         setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, (void *)&flags, sizeof(flags));
+//         if (IS_UDP(transport)) {
+//             maximize_sndbuf(sfd);
+//         } else {
+//             error = setsockopt(sfd, SOL_SOCKET, SO_KEEPALIVE, (void *)&flags, sizeof(flags));
+//             if (error != 0)
+//                 perror("setsockopt");
 
-            error = setsockopt(sfd, SOL_SOCKET, SO_LINGER, (void *)&ling, sizeof(ling));
-            if (error != 0)
-                perror("setsockopt");
+//             error = setsockopt(sfd, SOL_SOCKET, SO_LINGER, (void *)&ling, sizeof(ling));
+//             if (error != 0)
+//                 perror("setsockopt");
 
-            error = setsockopt(sfd, IPPROTO_TCP, TCP_NODELAY, (void *)&flags, sizeof(flags));
-            if (error != 0)
-                perror("setsockopt");
-        }
+//             error = setsockopt(sfd, IPPROTO_TCP, TCP_NODELAY, (void *)&flags, sizeof(flags));
+//             if (error != 0)
+//                 perror("setsockopt");
+//         }
 
-        if (bind(sfd, next->ai_addr, next->ai_addrlen) == -1) {
-            if (errno != EADDRINUSE) {
-                perror("bind()");
-                close(sfd);
-                freeaddrinfo(ai);
-                return 1;
-            }
-            close(sfd);
-            continue;
-        } else {
-            success++;
-            if (!IS_UDP(transport) && listen(sfd, settings.backlog) == -1) {
-                perror("listen()");
-                close(sfd);
-                freeaddrinfo(ai);
-                return 1;
-            }
-            if (portnumber_file != NULL &&
-                (next->ai_addr->sa_family == AF_INET ||
-                 next->ai_addr->sa_family == AF_INET6)) {
-                union {
-                    struct sockaddr_in in;
-                    struct sockaddr_in6 in6;
-                } my_sockaddr;
-                socklen_t len = sizeof(my_sockaddr);
-                if (getsockname(sfd, (struct sockaddr*)&my_sockaddr, &len)==0) {
-                    if (next->ai_addr->sa_family == AF_INET) {
-                        fprintf(portnumber_file, "%s INET: %u\n",
-                                IS_UDP(transport) ? "UDP" : "TCP",
-                                ntohs(my_sockaddr.in.sin_port));
-                    } else {
-                        fprintf(portnumber_file, "%s INET6: %u\n",
-                                IS_UDP(transport) ? "UDP" : "TCP",
-                                ntohs(my_sockaddr.in6.sin6_port));
-                    }
-                }
-            }
-        }
+//         if (bind(sfd, next->ai_addr, next->ai_addrlen) == -1) {
+//             if (errno != EADDRINUSE) {
+//                 perror("bind()");
+//                 close(sfd);
+//                 freeaddrinfo(ai);
+//                 return 1;
+//             }
+//             close(sfd);
+//             continue;
+//         } else {
+//             success++;
+//             if (!IS_UDP(transport) && listen(sfd, settings.backlog) == -1) {
+//                 perror("listen()");
+//                 close(sfd);
+//                 freeaddrinfo(ai);
+//                 return 1;
+//             }
+//             if (portnumber_file != NULL &&
+//                 (next->ai_addr->sa_family == AF_INET ||
+//                  next->ai_addr->sa_family == AF_INET6)) {
+//                 union {
+//                     struct sockaddr_in in;
+//                     struct sockaddr_in6 in6;
+//                 } my_sockaddr;
+//                 socklen_t len = sizeof(my_sockaddr);
+//                 if (getsockname(sfd, (struct sockaddr*)&my_sockaddr, &len)==0) {
+//                     if (next->ai_addr->sa_family == AF_INET) {
+//                         fprintf(portnumber_file, "%s INET: %u\n",
+//                                 IS_UDP(transport) ? "UDP" : "TCP",
+//                                 ntohs(my_sockaddr.in.sin_port));
+//                     } else {
+//                         fprintf(portnumber_file, "%s INET6: %u\n",
+//                                 IS_UDP(transport) ? "UDP" : "TCP",
+//                                 ntohs(my_sockaddr.in6.sin6_port));
+//                     }
+//                 }
+//             }
+//         }
 
-        if (IS_UDP(transport)) {
-            int c;
+//         if (IS_UDP(transport)) {
+//             int c;
 
-            for (c = 0; c < settings.num_threads_per_udp; c++) {
-                /* Allocate one UDP file descriptor per worker thread;
-                 * this allows "stats conns" to separately list multiple
-                 * parallel UDP requests in progress.
-                 *
-                 * The dispatch code round-robins new connection requests
-                 * among threads, so this is guaranteed to assign one
-                 * FD to each thread.
-                 */
-                int per_thread_fd;
-                if (c == 0) {
-                    per_thread_fd = sfd;
-                } else {
-                    per_thread_fd = dup(sfd);
-                    if (per_thread_fd < 0) {
-                        perror("Failed to duplicate file descriptor");
-                        exit(EXIT_FAILURE);
-                    }
-                }
-                dispatch_conn_new(per_thread_fd, conn_read,
-                                  EV_READ | EV_PERSIST,
-                                  UDP_READ_BUFFER_SIZE, transport, NULL, conntag, bproto);
-            }
-        } else {
-            if (!(listen_conn_add = conn_new(sfd, conn_listening,
-                                             EV_READ | EV_PERSIST, 1,
-                                             transport, main_base, NULL, conntag, bproto))) {
-                fprintf(stderr, "failed to create listening connection\n");
-                exit(EXIT_FAILURE);
-            }
-#ifdef TLS
-            listen_conn_add->ssl_enabled = ssl_enabled;
-#else
-            assert(ssl_enabled == false);
-#endif
-            listen_conn_add->next = listen_conn;
-            listen_conn = listen_conn_add;
-        }
-    }
+//             for (c = 0; c < settings.num_threads_per_udp; c++) {
+//                 /* Allocate one UDP file descriptor per worker thread;
+//                  * this allows "stats conns" to separately list multiple
+//                  * parallel UDP requests in progress.
+//                  *
+//                  * The dispatch code round-robins new connection requests
+//                  * among threads, so this is guaranteed to assign one
+//                  * FD to each thread.
+//                  */
+//                 int per_thread_fd;
+//                 if (c == 0) {
+//                     per_thread_fd = sfd;
+//                 } else {
+//                     per_thread_fd = dup(sfd);
+//                     if (per_thread_fd < 0) {
+//                         perror("Failed to duplicate file descriptor");
+//                         exit(EXIT_FAILURE);
+//                     }
+//                 }
+//                 dispatch_conn_new(per_thread_fd, conn_read,
+//                                   EV_READ | EV_PERSIST,
+//                                   UDP_READ_BUFFER_SIZE, transport, NULL, conntag, bproto);
+//             }
+//         } else {
+//             if (!(listen_conn_add = conn_new(sfd, conn_listening,
+//                                              EV_READ | EV_PERSIST, 1,
+//                                              transport, main_base, NULL, conntag, bproto))) {
+//                 fprintf(stderr, "failed to create listening connection\n");
+//                 exit(EXIT_FAILURE);
+//             }
+// #ifdef TLS
+//             listen_conn_add->ssl_enabled = ssl_enabled;
+// #else
+//             assert(ssl_enabled == false);
+// #endif
+//             listen_conn_add->next = listen_conn;
+//             listen_conn = listen_conn_add;
+//         }
+//     }
 
-    freeaddrinfo(ai);
+//     freeaddrinfo(ai);
 
-    /* Return zero iff we detected no errors in starting up connections */
-    return success == 0;
-}
+//     /* Return zero iff we detected no errors in starting up connections */
+//     return success == 0;
+// }
 
 static int server_sockets(int port, enum network_transport transport,
                           FILE *portnumber_file) {
@@ -4392,12 +4531,12 @@ static int server_socket_unix(const char *path, int access_mask) {
         close(sfd);
         return 1;
     }
-    if (!(listen_conn = conn_new(sfd, conn_listening,
-                                 EV_READ | EV_PERSIST, 1,
-                                 local_transport, main_base, NULL, 0, settings.binding_protocol))) {
-        fprintf(stderr, "failed to create listening connection\n");
-        exit(EXIT_FAILURE);
-    }
+    // if (!(listen_conn = conn_new(sfd, conn_listening,
+    //                              EV_READ | EV_PERSIST, 1,
+    //                              local_transport, main_base, NULL, 0, settings.binding_protocol))) {
+    //     fprintf(stderr, "failed to create listening connection\n");
+    //     exit(EXIT_FAILURE);
+    // }
 
     return 0;
 }
@@ -5433,10 +5572,10 @@ int main (int argc, char **argv) {
     }
 
     /* handle SIGINT, SIGTERM */
-    signal(SIGINT, sig_handler);
-    signal(SIGTERM, sig_handler);
-    signal(SIGHUP, sighup_handler);
-    signal(SIGUSR1, sig_usrhandler);
+    // signal(SIGINT, sig_handler);
+    // signal(SIGTERM, sig_handler);
+    // signal(SIGHUP, sighup_handler);
+    // signal(SIGUSR1, sig_usrhandler);
 
     /* init settings */
     settings_init();
@@ -5680,6 +5819,7 @@ int main (int argc, char **argv) {
                                 " Set this value to the number of cores in"
                                 " your machine or less.\n");
             }
+            num_threads = settings.num_threads;
             break;
         case 'D':
             if (! optarg || ! optarg[0]) {
@@ -6495,6 +6635,8 @@ int main (int argc, char **argv) {
         exit(1);
     }
 
+    mtcp_register_signal(SIGINT, signal_handler);
+
     // mctx = mtcp_create_context(0);
     // if(!mctx){
     //     fprintf(stderr, "failed to create mtcp context, exits\n");
@@ -6549,7 +6691,9 @@ int main (int argc, char **argv) {
     /* initialize other stuff */
     stats_init();
     logger_init();
+    fprintf(stdout, "try connection initialization\n");
     conn_init();
+    fprintf(stdout, "finish connection initialization\n");
     bool reuse_mem = false;
     void *mem_base = NULL;
     bool prefill = false;
@@ -6793,12 +6937,12 @@ int main (int argc, char **argv) {
 
     /* enter the event loop */
     while (!stop_main_loop) {
-        if (event_base_loop(main_base, EVLOOP_ONCE) != 0) {
-            retval = EXIT_FAILURE;
-            break;
-        }
+        // if (event_base_loop(main_base, EVLOOP_ONCE) != 0) {
+        //     retval = EXIT_FAILURE;
+        //     break;
+        // }
     }
-
+    
     switch (stop_main_loop) {
         case GRACE_STOP:
             fprintf(stderr, "Gracefully stopping\n");
