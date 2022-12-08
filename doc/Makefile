@@ -151,12 +151,12 @@ MANS = $(man_MANS)
 am__tagged_files = $(HEADERS) $(SOURCES) $(TAGS_FILES) $(LISP)
 am__DIST_COMMON = $(srcdir)/Makefile.in
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
-ACLOCAL = ${SHELL} /root/projects/memcached/missing aclocal-1.16
+ACLOCAL = ${SHELL} /home/zobin/projects/mTCP-memcached/missing aclocal-1.16
 AMTAR = $${TAR-tar}
 AM_DEFAULT_VERBOSITY = 1
-AUTOCONF = ${SHELL} /root/projects/memcached/missing autoconf
-AUTOHEADER = ${SHELL} /root/projects/memcached/missing autoheader
-AUTOMAKE = ${SHELL} /root/projects/memcached/missing automake-1.16
+AUTOCONF = ${SHELL} /home/zobin/projects/mTCP-memcached/missing autoconf
+AUTOHEADER = ${SHELL} /home/zobin/projects/mTCP-memcached/missing autoheader
+AUTOMAKE = ${SHELL} /home/zobin/projects/mTCP-memcached/missing automake-1.16
 AWK = mawk
 CC = gcc
 CCDEPMODE = depmode=gcc3
@@ -184,7 +184,7 @@ LDFLAGS = -Lthird_party/mtcp/mtcp/lib -L./third_party/libevent/build/lib  -Wl,-r
 LIBOBJS = 
 LIBS = -levent 
 LTLIBOBJS = 
-MAKEINFO = ${SHELL} /root/projects/memcached/missing makeinfo
+MAKEINFO = ${SHELL} /home/zobin/projects/mTCP-memcached/missing makeinfo
 MKDIR_P = /usr/bin/mkdir -p
 OBJEXT = o
 OPENSSL_CFLAGS = 
@@ -192,10 +192,10 @@ OPENSSL_LIBS =
 PACKAGE = memcached
 PACKAGE_BUGREPORT = memcached@googlegroups.com
 PACKAGE_NAME = memcached
-PACKAGE_STRING = memcached 1.6.17_10_gf196287
+PACKAGE_STRING = memcached UNKNOWN
 PACKAGE_TARNAME = memcached
 PACKAGE_URL = 
-PACKAGE_VERSION = 1.6.17_10_gf196287
+PACKAGE_VERSION = UNKNOWN
 PATH_SEPARATOR = :
 PKG_CONFIG = /usr/bin/pkg-config
 PKG_CONFIG_LIBDIR = 
@@ -206,13 +206,13 @@ PROFILER_LDFLAGS = -lgcov
 SET_MAKE = 
 SHELL = /bin/bash
 STRIP = 
-VERSION = 1.6.17_10_gf196287
+VERSION = UNKNOWN
 XML2RFC = no
-XSLTPROC = /root/anaconda3/bin/xsltproc
-abs_builddir = /root/projects/memcached/doc
-abs_srcdir = /root/projects/memcached/doc
-abs_top_builddir = /root/projects/memcached
-abs_top_srcdir = /root/projects/memcached
+XSLTPROC = no
+abs_builddir = /home/zobin/projects/mTCP-memcached/doc
+abs_srcdir = /home/zobin/projects/mTCP-memcached/doc
+abs_top_builddir = /home/zobin/projects/mTCP-memcached
+abs_top_srcdir = /home/zobin/projects/mTCP-memcached
 ac_ct_CC = gcc
 am__include = include
 am__leading_dot = .
@@ -239,7 +239,7 @@ host_vendor = pc
 htmldir = ${docdir}
 includedir = ${prefix}/include
 infodir = ${datarootdir}/info
-install_sh = ${SHELL} /root/projects/memcached/install-sh
+install_sh = ${SHELL} /home/zobin/projects/mTCP-memcached/install-sh
 libdir = ${exec_prefix}/lib
 libexecdir = ${exec_prefix}/libexec
 localedir = ${datarootdir}/locale
@@ -521,7 +521,7 @@ uninstall-man: uninstall-man1
 #	no -d $(RFC2629_DTD) -c $(builddir) $< $@
 #
 #%.full: %.xml $(RFC2629_XSL)
-#	/root/anaconda3/bin/xsltproc --nonet $(RFC2629_XSL) $< > $@
+#	no --nonet $(RFC2629_XSL) $< > $@
 
 # Prevent make from deleting intermediate files
 #all-full: $(SPECIFICATIONS:.txt=.full)

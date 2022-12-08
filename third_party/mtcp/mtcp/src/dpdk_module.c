@@ -697,6 +697,7 @@ dpdk_load_module(void)
 
 		/* Initialise each port */
 		int i;
+		printf("num_devices_attached: %d\n", num_devices_attached);
 		for (i = 0; i < num_devices_attached; ++i) {
 		        /* get portid form the index of attached devices */
 		        portid = devices_attached[i];
@@ -709,10 +710,15 @@ dpdk_load_module(void)
 #endif
 			/* init port */
 			printf("Initializing port %u... ", (unsigned) portid);
+			printf("Device name: %s", dev_info[portid].device->name);
 			fflush(stdout);
-			if (!strncmp(dev_info[portid].driver_name, "net_mlx", 7))
+
+			printf("try check driver type %s\n", dev_info[portid].driver_name);fflush(stdout);
+			if (!strncmp(dev_info[portid].driver_name, "mlx5_pci", 8)){
 				port_conf.rx_adv_conf.rss_conf.rss_key_len = 40;
-			
+			}
+				
+			printf("try rte_eth_dev_configure\n");fflush(stdout);
 			ret = rte_eth_dev_configure(portid, CONFIG.num_cores, CONFIG.num_cores, &port_conf);
 			if (ret < 0)
 				rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u, cores: %d\n",
@@ -724,6 +730,7 @@ dpdk_load_module(void)
 			rte_eth_macaddr_get(portid, &ports_eth_addr[portid]);
 #endif
 
+			printf("try rte_eth_rx_queue_setup\n");fflush(stdout);
 			for (rxlcore_id = 0; rxlcore_id < CONFIG.num_cores; rxlcore_id++) {
 				ret = rte_eth_rx_queue_setup(portid, rxlcore_id, nb_rxd,
 							     rte_eth_dev_socket_id(portid), &rx_conf,
@@ -736,6 +743,7 @@ dpdk_load_module(void)
 
 			/* init one TX queue on each port per CPU (this is redundant for this app) */
 			fflush(stdout);
+			printf("try rte_eth_tx_queue_setup\n");fflush(stdout);
 			for (rxlcore_id = 0; rxlcore_id < CONFIG.num_cores; rxlcore_id++) {
 				ret = rte_eth_tx_queue_setup(portid, rxlcore_id, nb_txd,
 							     rte_eth_dev_socket_id(portid), &tx_conf);
@@ -746,6 +754,7 @@ dpdk_load_module(void)
 			}
 
 			/* Start device */
+			printf("try rte_eth_dev_start\n");fflush(stdout);
 			ret = rte_eth_dev_start(portid);
 			if (ret < 0)
 				rte_exit(EXIT_FAILURE, "rte_eth_dev_start:err=%d, port=%u\n",

@@ -149,7 +149,7 @@
 #define PACKAGE_NAME "memcached"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "memcached 1.6.17_10_gf196287"
+#define PACKAGE_STRING "memcached UNKNOWN"
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "memcached"
@@ -158,7 +158,7 @@
 #define PACKAGE_URL ""
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "1.6.17_10_gf196287"
+#define PACKAGE_VERSION "UNKNOWN"
 
 /* Set to nonzero if you want to enable proxy code */
 /* #undef PROXY */
@@ -176,7 +176,7 @@
 /* #undef TLS */
 
 /* Version number of package */
-#define VERSION "1.6.17_10_gf196287"
+#define VERSION "UNKNOWN"
 
 /* Define WORDS_BIGENDIAN to 1 if your processor stores words with the most
    significant byte first (like Motorola and SPARC, unlike Intel). */

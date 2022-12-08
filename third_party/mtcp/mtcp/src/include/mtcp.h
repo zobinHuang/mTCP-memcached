@@ -73,7 +73,7 @@
 #define BLOCKING_SUPPORT                FALSE
 
 #ifndef MAX_CPUS
-#define MAX_CPUS                        16
+#define MAX_CPUS                        24
 #endif
 /*----------------------------------------------------------------------------*/
 /* Statistics */

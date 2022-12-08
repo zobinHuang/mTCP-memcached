@@ -102,60 +102,60 @@ GetNumQueues()
 /**
  * returns max numa ID while probing for rte devices
  */
-static int
-probe_all_rte_devices(char **argv, int *argc, char *dev_name_list)
-{
-	PciDevice pd;
-	int fd, numa_id = -1;
-	static char end[] = "";
-	static const char delim[] = " \t";
-	static char *dev_tokenizer;
-	char *dev_token, *saveptr;
+// static int
+// probe_all_rte_devices(char **argv, int *argc, char *dev_name_list)
+// {
+// 	PciDevice pd;
+// 	int fd, numa_id = -1;
+// 	static char end[] = "";
+// 	static const char delim[] = " \t";
+// 	static char *dev_tokenizer;
+// 	char *dev_token, *saveptr;
 
-	dev_tokenizer = strdup(dev_name_list);
-	if (dev_tokenizer == NULL) {
-		TRACE_ERROR("Can't allocate memory for dev_tokenizer!\n");
-		exit(EXIT_FAILURE);
-	}
-	fd = open(DEV_PATH, O_RDONLY);
-	if (fd != -1) {
-		dev_token = strtok_r(dev_tokenizer, delim, &saveptr);
-		while (dev_token != NULL) {
-			strcpy(pd.ifname, dev_token);
-			if (ioctl(fd, FETCH_PCI_ADDRESS, &pd) == -1) {
-				TRACE_DBG("Could not find pci info on dpdk "
-					  "device: %s. Is it a dpdk-attached "
-					  "interface?\n", dev_token);
-				goto loop_over;
-			}
-			argv[*argc] = strdup("-a");
-			argv[*argc + 1] = calloc(PCI_LENGTH, 1);
-			if (argv[*argc] == NULL ||
-			    argv[*argc + 1] == NULL) {
-				TRACE_ERROR("Memory allocation error!\n");
-				exit(EXIT_FAILURE);
-			}
-			sprintf(argv[*argc + 1], PCI_DOM":"PCI_BUS":"
-				PCI_DEVICE"."PCI_FUNC,
-				pd.pa.domain, pd.pa.bus, pd.pa.device,
-				pd.pa.function);
-			*argc += 2;
-			if (pd.numa_socket > numa_id) numa_id = pd.numa_socket;
-		loop_over:
-			dev_token = strtok_r(NULL, delim, &saveptr);
-		}
-		close(fd);
-		free(dev_tokenizer);
-	} else {
-		TRACE_ERROR("Error opening dpdk-face!\n");
-		exit(EXIT_FAILURE);
-	}
+// 	dev_tokenizer = strdup(dev_name_list);
+// 	if (dev_tokenizer == NULL) {
+// 		TRACE_ERROR("Can't allocate memory for dev_tokenizer!\n");
+// 		exit(EXIT_FAILURE);
+// 	}
+// 	fd = open(DEV_PATH, O_RDONLY);
+// 	if (fd != -1) {
+// 		dev_token = strtok_r(dev_tokenizer, delim, &saveptr);
+// 		while (dev_token != NULL) {
+// 			strcpy(pd.ifname, dev_token);
+// 			if (ioctl(fd, FETCH_PCI_ADDRESS, &pd) == -1) {
+// 				TRACE_DBG("Could not find pci info on dpdk "
+// 					  "device: %s. Is it a dpdk-attached "
+// 					  "interface?\n", dev_token);
+// 				goto loop_over;
+// 			}
+// 			argv[*argc] = strdup("-a");
+// 			argv[*argc + 1] = calloc(PCI_LENGTH, 1);
+// 			if (argv[*argc] == NULL ||
+// 			    argv[*argc + 1] == NULL) {
+// 				TRACE_ERROR("Memory allocation error!\n");
+// 				exit(EXIT_FAILURE);
+// 			}
+// 			sprintf(argv[*argc + 1], PCI_DOM":"PCI_BUS":"
+// 				PCI_DEVICE"."PCI_FUNC,
+// 				pd.pa.domain, pd.pa.bus, pd.pa.device,
+// 				pd.pa.function);
+// 			*argc += 2;
+// 			if (pd.numa_socket > numa_id) numa_id = pd.numa_socket;
+// 		loop_over:
+// 			dev_token = strtok_r(NULL, delim, &saveptr);
+// 		}
+// 		close(fd);
+// 		free(dev_tokenizer);
+// 	} else {
+// 		TRACE_ERROR("Error opening dpdk-face!\n");
+// 		exit(EXIT_FAILURE);
+// 	}
 
-	/* add the terminating "" sequence */
-	argv[*argc] = end;
+// 	/* add the terminating "" sequence */
+// 	argv[*argc] = end;
 
-	return numa_id;
-}
+// 	return numa_id;
+// }
 #endif /* !DISABLE_DPDK */
 /*----------------------------------------------------------------------------*/
 int
@@ -315,7 +315,7 @@ SetNetEnv(char *dev_name_list, char *port_stat_list)
 			argv[3] = "-n";
 			argv[4] = mem_channels;
 			argv[5] = "--proc-type=auto";
-			probe_all_rte_devices(argv, &argc, dev_name_list);
+			// probe_all_rte_devices(argv, &argc, dev_name_list);
 		} else {	
 			// case that use mininet
 			argc = 9;

@@ -437,7 +437,7 @@ Copyright (C) 2012 Free Software Foundation, Inc.
 This config.status script is free software; the Free Software Foundation
 gives unlimited permission to copy, distribute and modify it."
 
-ac_pwd='/root/projects/memcached/third_party/mtcp'
+ac_pwd='/home/zobin/projects/mTCP-memcached/third_party/mtcp'
 srcdir='.'
 INSTALL='/usr/bin/install -c'
 MKDIR_P='/usr/bin/mkdir -p'
@@ -645,12 +645,12 @@ S["mkdir_p"]="$(MKDIR_P)"
 S["MKDIR_P"]="/usr/bin/mkdir -p"
 S["INSTALL_STRIP_PROGRAM"]="$(install_sh) -c -s"
 S["STRIP"]=""
-S["install_sh"]="${SHELL} /root/projects/memcached/third_party/mtcp/install-sh"
-S["MAKEINFO"]="${SHELL} /root/projects/memcached/third_party/mtcp/missing makeinfo"
-S["AUTOHEADER"]="${SHELL} /root/projects/memcached/third_party/mtcp/missing autoheader"
-S["AUTOMAKE"]="${SHELL} /root/projects/memcached/third_party/mtcp/missing automake-1.16"
-S["AUTOCONF"]="${SHELL} /root/projects/memcached/third_party/mtcp/missing autoconf"
-S["ACLOCAL"]="${SHELL} /root/projects/memcached/third_party/mtcp/missing aclocal-1.16"
+S["install_sh"]="${SHELL} /home/zobin/projects/mTCP-memcached/third_party/mtcp/install-sh"
+S["MAKEINFO"]="${SHELL} /home/zobin/projects/mTCP-memcached/third_party/mtcp/missing makeinfo"
+S["AUTOHEADER"]="${SHELL} /home/zobin/projects/mTCP-memcached/third_party/mtcp/missing autoheader"
+S["AUTOMAKE"]="${SHELL} /home/zobin/projects/mTCP-memcached/third_party/mtcp/missing automake-1.16"
+S["AUTOCONF"]="${SHELL} /home/zobin/projects/mTCP-memcached/third_party/mtcp/missing autoconf"
+S["ACLOCAL"]="${SHELL} /home/zobin/projects/mTCP-memcached/third_party/mtcp/missing aclocal-1.16"
 S["VERSION"]="3"
 S["PACKAGE"]="mtcp"
 S["CYGPATH_W"]="echo"

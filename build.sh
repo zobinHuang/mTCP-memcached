@@ -25,13 +25,13 @@ make
 make install
 
 # build dpdk-iface
-echo "Register network interface dpdk0"
-cd $mmc_root/third_party/dpdk-iface-kmod
-export RTE_SDK=/usr/src/dpdk-21.11
-make
-insmod dpdk_iface.ko
-./dpdk_iface_main
-ifconfig dpdk0 10.0.109.2 netmask 255.255.255.0 up
+# echo "Register network interface dpdk0"
+# cd $mmc_root/third_party/dpdk-iface-kmod
+# export RTE_SDK=/usr/src/dpdk-21.11
+# make
+# insmod dpdk_iface.ko
+# ./dpdk_iface_main
+# ifconfig dpdk0 10.0.109.2 netmask 255.255.255.0 up
 
 # build memcached
 echo "Build Memcached..."
